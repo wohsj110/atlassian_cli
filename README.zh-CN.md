@@ -96,24 +96,67 @@ atk-cfl page view 123456 --content-only
 
 ## Agent Skills
 
-安装内置 skills：
+通过开放的 `skills` CLI 安装：
 
 ```bash
-node npm/skill-installer/bin/install.js install
+npx skills add https://github.com/wohsj110/atlassian_cli \
+  --skill atk-jira \
+  --skill atk-cfl \
+  --agent codex \
+  --agent claude-code \
+  --global \
+  --yes
 ```
 
-安装到指定目录：
+安装前查看仓库内可用 skills：
 
 ```bash
-node npm/skill-installer/bin/install.js install --dest /path/to/skills
+npx skills add https://github.com/wohsj110/atlassian_cli --list
 ```
 
-安装器会复制：
+skills.sh 完成索引后，稳定 skill ID 是：
 
-- `Jira/SKILL.md`
-- `Jira/CliReference.md`
-- `Confluence/SKILL.md`
-- `Confluence/CliReference.md`
+- `wohsj110/atlassian_cli/atk-jira`
+- `wohsj110/atlassian_cli/atk-cfl`
+
+也可以通过本项目自己的 npm helper 安装：
+
+```bash
+npx @wohsj110/atlassian-agent-skill add atlassian-agent
+```
+
+一键安装 skills 和 CLI 二进制：
+
+```bash
+npx @wohsj110/atlassian-agent-skill add atlassian-agent --install-cli
+```
+
+只安装到某一个 agent：
+
+```bash
+npx @wohsj110/atlassian-agent-skill add atlassian-agent --target codex
+npx @wohsj110/atlassian-agent-skill add atlassian-agent --target claude
+```
+
+默认安装目标：
+
+- Codex：`~/.codex/skills`
+- Claude Code：`~/.claude/skills`
+
+两种安装方式都会复制：
+
+- `atk-jira/SKILL.md`
+- `atk-jira/CliReference.md`
+- `atk-cfl/SKILL.md`
+- `atk-cfl/CliReference.md`
+
+安装后的 skill 自身会指导 agent 检查 `atk-jira` / `atk-cfl` 是否存在，并在缺失时通过 Homebrew 或 npm helper 安装 CLI。
+
+检查安装状态：
+
+```bash
+npx @wohsj110/atlassian-agent-skill doctor
+```
 
 ## 输出契约
 

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://skills.sh/schemas/skills.sh.schema.json",
+  "notGrouped": "bottom",
+  "groupings": [
+    {
+      "title": "Atlassian",
+      "description": "Skills for working with Atlassian Jira and Confluence through atk-jira and atk-cfl.",
+      "skills": [
+        "atk-jira",
+        "atk-cfl"
+      ]
+    }
+  ]
+}

@@ -1,6 +1,17 @@
+---
+name: atk-cfl
+description: Use when working with Atlassian Confluence Cloud through the atk-cfl CLI, including searching content, reading pages, creating/editing/copying/deleting pages, managing spaces, attachments, Confluence account checks, and Confluence credential setup.
+---
+
 # Confluence CLI Skill
 
 Use this skill when working with Confluence pages through `atk-cfl`.
+
+## CLI Setup
+- Before using Confluence commands, check whether `atk-cfl` is available with `command -v atk-cfl`.
+- If missing, install the CLI with `npx @wohsj110/atlassian-agent-skill install-cli` or `brew tap wohsj110/tap && brew install --cask atk-cfl`.
+- After installation, run `atk-cfl --help` to verify the binary.
+- If credentials are not configured, run `atk-cfl init` or ask the user for the non-secret URL/email setup preference. Never ask the user to paste secrets into chat; use stdin, environment variables, or the OS keyring flow.
 
 ## Rules
 - Read the current page state before writing.

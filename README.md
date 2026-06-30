@@ -96,24 +96,67 @@ atk-cfl page view 123456 --content-only
 
 ## Agent Skills
 
-Install the bundled skills locally:
+Install through the open `skills` CLI:
 
 ```bash
-node npm/skill-installer/bin/install.js install
+npx skills add https://github.com/wohsj110/atlassian_cli \
+  --skill atk-jira \
+  --skill atk-cfl \
+  --agent codex \
+  --agent claude-code \
+  --global \
+  --yes
 ```
 
-Install to a custom directory:
+List the available skills before installing:
 
 ```bash
-node npm/skill-installer/bin/install.js install --dest /path/to/skills
+npx skills add https://github.com/wohsj110/atlassian_cli --list
 ```
 
-The installer copies:
+After skills.sh indexes this repository, the stable skill IDs are:
 
-- `Jira/SKILL.md`
-- `Jira/CliReference.md`
-- `Confluence/SKILL.md`
-- `Confluence/CliReference.md`
+- `wohsj110/atlassian_cli/atk-jira`
+- `wohsj110/atlassian_cli/atk-cfl`
+
+Install through this project's npm helper:
+
+```bash
+npx @wohsj110/atlassian-agent-skill add atlassian-agent
+```
+
+Install skills and CLI binaries in one step:
+
+```bash
+npx @wohsj110/atlassian-agent-skill add atlassian-agent --install-cli
+```
+
+Install for only one agent:
+
+```bash
+npx @wohsj110/atlassian-agent-skill add atlassian-agent --target codex
+npx @wohsj110/atlassian-agent-skill add atlassian-agent --target claude
+```
+
+The default install targets are:
+
+- Codex: `~/.codex/skills`
+- Claude Code: `~/.claude/skills`
+
+Both installation methods copy:
+
+- `atk-jira/SKILL.md`
+- `atk-jira/CliReference.md`
+- `atk-cfl/SKILL.md`
+- `atk-cfl/CliReference.md`
+
+Each installed skill can help the agent check for `atk-jira` / `atk-cfl` and install the missing CLI with Homebrew or the npm helper.
+
+Check the installation:
+
+```bash
+npx @wohsj110/atlassian-agent-skill doctor
+```
 
 ## Output Contract
 
