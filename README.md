@@ -140,7 +140,8 @@ npx @wohsj110/atlassian-agent-skill add atlassian-agent --target claude
 
 The default install targets are:
 
-- Codex: `~/.codex/skills`
+- Codex via `npx skills`: `~/.agents/skills`
+- Codex via npm helper: `~/.codex/skills`
 - Claude Code: `~/.claude/skills`
 
 Both installation methods copy:

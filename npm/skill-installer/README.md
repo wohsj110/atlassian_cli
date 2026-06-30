@@ -24,8 +24,9 @@ npx @wohsj110/atlassian-agent-skill add atlassian-agent
 
 This installs:
 
-- `atk-jira` into `~/.codex/skills` and `~/.claude/skills`
-- `atk-cfl` into `~/.codex/skills` and `~/.claude/skills`
+- `atk-jira` into `~/.codex/skills` and `~/.claude/skills` when using this npm helper
+- `atk-cfl` into `~/.codex/skills` and `~/.claude/skills` when using this npm helper
+- Official `npx skills` installs Codex skills into `~/.agents/skills`
 
 ## Install Skills and CLI
 

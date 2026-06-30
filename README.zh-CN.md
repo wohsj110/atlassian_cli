@@ -140,7 +140,8 @@ npx @wohsj110/atlassian-agent-skill add atlassian-agent --target claude
 
 默认安装目标：
 
-- Codex：`~/.codex/skills`
+- 通过 `npx skills` 安装到 Codex：`~/.agents/skills`
+- 通过 npm helper 安装到 Codex：`~/.codex/skills`
 - Claude Code：`~/.claude/skills`
 
 两种安装方式都会复制：
