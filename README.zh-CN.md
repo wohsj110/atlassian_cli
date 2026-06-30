@@ -198,17 +198,7 @@ skills.sh 完成索引后，稳定 skill ID 是：
 - Codex：`~/.agents/skills`
 - Claude Code：`~/.claude/skills`
 
-安装后的 skill 自身会指导 agent 检查 `atk-jira` / `atk-cfl` 是否存在，并在缺失时通过 Homebrew 或 npm helper 安装 CLI。
-
-### 可选 npm helper
-
-本项目也提供 npm helper，用于安装两个 skills 并检查 CLI：
-
-```bash
-npx @wohsj110/atlassian-agent-skill add atlassian-agent
-npx @wohsj110/atlassian-agent-skill add atlassian-agent --install-cli
-npx @wohsj110/atlassian-agent-skill doctor
-```
+安装后的 skill 自身会指导 agent 检查 `atk-jira` / `atk-cfl` 是否存在，并在缺失时通过 Homebrew 安装 CLI。
 
 ## 输出契约
 
@@ -228,7 +218,6 @@ npx @wohsj110/atlassian-agent-skill doctor
 
 ```bash
 go test ./shared/... ./tools/atk-jira/... ./tools/atk-cfl/...
-npm test --prefix npm/skill-installer
 ```
 
 构建两个二进制：
@@ -251,7 +240,6 @@ shared/             可复用 auth、config、HTTP client、output、error、cre
 tools/atk-jira/          Jira CLI command、API、query、view 代码。
 tools/atk-cfl/          Confluence CLI command、API、query、view 代码。
 skills/             面向 agent 的 Jira 和 Confluence skill。
-npm/skill-installer 安装 agent skills 的 npm 包。
 docs/               发布和项目文档。
 ```
 

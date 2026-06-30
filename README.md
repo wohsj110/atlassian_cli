@@ -198,17 +198,7 @@ Install targets used by the open `skills` CLI:
 - Codex: `~/.agents/skills`
 - Claude Code: `~/.claude/skills`
 
-Each installed skill can help the agent check for `atk-jira` / `atk-cfl` and install the missing CLI with Homebrew or the npm helper.
-
-### Optional Helper
-
-This project also publishes an npm helper for installing both skills and checking the CLI:
-
-```bash
-npx @wohsj110/atlassian-agent-skill add atlassian-agent
-npx @wohsj110/atlassian-agent-skill add atlassian-agent --install-cli
-npx @wohsj110/atlassian-agent-skill doctor
-```
+Each installed skill can help the agent check for `atk-jira` / `atk-cfl` and install the missing CLI with Homebrew.
 
 ## Output Contract
 
@@ -228,7 +218,6 @@ Run tests:
 
 ```bash
 go test ./shared/... ./tools/atk-jira/... ./tools/atk-cfl/...
-npm test --prefix npm/skill-installer
 ```
 
 Build both binaries:
@@ -251,7 +240,6 @@ shared/             Reusable auth, config, HTTP client, output, error, and crede
 tools/atk-jira/          Jira CLI command, API, query, and view code.
 tools/atk-cfl/          Confluence CLI command, API, query, and view code.
 skills/             Agent-facing Jira and Confluence skill instructions.
-npm/skill-installer npm package that installs skills into agent skill directories.
 docs/               Release and project documentation.
 ```
 

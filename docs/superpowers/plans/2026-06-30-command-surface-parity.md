@@ -15,7 +15,6 @@
 - Modify: `AGENTS.md` to state command-surface parity as the product target.
 - Modify: `README.md` and `README.zh-CN.md` to point to the compatibility spec.
 - Modify: `skills/Jira/CliReference.md` and `skills/Confluence/CliReference.md` after each command family is implemented.
-- Modify: `npm/skill-installer/skills/**` in lockstep with `skills/**`.
 - Create: `docs/COMPATIBILITY.md` for the target command surface.
 - Create: `docs/TEST_STRATEGY.md` for parity testing.
 - Create: `NOTICE.md` for MIT attribution.
@@ -82,14 +81,12 @@
 - [ ] Ensure no default CI path requires credentials.
 - [ ] Ensure no command logs secrets in verbose output, errors, config output, or tests.
 - [ ] Run `go test ./shared/... ./tools/atk-jira/... ./tools/atk-cfl/...`.
-- [ ] Run `npm test --prefix npm/skill-installer`.
 - [ ] Run local build smoke for both binaries.
 
 ## Current Manual Verification Commands
 
 ```bash
 go test ./shared/... ./tools/atk-jira/... ./tools/atk-cfl/...
-npm test --prefix npm/skill-installer
 tmpdir=$(mktemp -d)
 go build -o "$tmpdir/atk-jira" ./tools/atk-jira/cmd/atk-jira
 go build -o "$tmpdir/atk-cfl" ./tools/atk-cfl/cmd/atk-cfl

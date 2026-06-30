@@ -2,7 +2,7 @@
 
 [简体中文](RELEASING.zh-CN.md)
 
-This guide describes how to publish Atlassian Agent CLI to GitHub Releases, Homebrew, and npm.
+This guide describes how to publish Atlassian Agent CLI to GitHub Releases and Homebrew.
 
 ## Naming
 
@@ -10,7 +10,6 @@ Recommended public names:
 
 - GitHub repository: `wohsj110/atlassian_cli`
 - Homebrew casks or formulae: `atk-jira`, `atk-cfl`
-- npm package: `atlassian-agent-skill` or `@<owner>/atlassian-agent-skill`
 - Binaries: `atk-jira`, `atk-cfl`
 
 The `atk-*` names are the intended public command names. They are shorter than `atlassian-jira` / `atlassian-confluence` while still being less collision-prone than generic abbreviations.
@@ -21,7 +20,6 @@ Run the full local verification:
 
 ```bash
 go test ./shared/... ./tools/atk-jira/... ./tools/atk-cfl/...
-npm test --prefix npm/skill-installer
 goreleaser check
 goreleaser release --snapshot --clean
 ```
@@ -162,67 +160,25 @@ atk-jira --help
 atk-cfl --help
 ```
 
-## npm Skill Installer
-
-The npm package lives in `npm/skill-installer`.
-
-Check what will be published:
-
-```bash
-cd npm/skill-installer
-npm test
-npm pack --dry-run
-npm publish --dry-run
-```
-
-Publish:
-
-```bash
-npm login
-npm publish
-```
-
-If you publish a scoped package, use:
-
-```bash
-npm publish --access public
-```
-
-After publishing:
-
-```bash
-npx atlassian-agent-skill install
-```
-
-Or, for a scoped package:
-
-```bash
-npx @<owner>/atlassian-agent-skill install
-```
-
 ## Versioning
 
-Keep CLI and skill installer versions aligned unless there is a clear reason to split them.
+Use one shared version tag for both CLI binaries.
 
 For each release:
 
-1. Update `npm/skill-installer/package.json`.
-2. Commit the version change.
-3. Tag the release, for example `v0.1.0`.
-4. Push the tag.
-5. Publish the npm package.
+1. Commit release-ready changes.
+2. Tag the release, for example `v0.1.0`.
+3. Push the tag.
+4. Verify GitHub Release assets and Homebrew installation.
 
 ## Release Checklist
 
 - [ ] `go test ./shared/... ./tools/atk-jira/... ./tools/atk-cfl/...` passes.
-- [ ] `npm test --prefix npm/skill-installer` passes.
 - [ ] `goreleaser check` passes.
 - [ ] `goreleaser release --snapshot --clean` passes.
 - [ ] GitHub repository exists.
 - [ ] Homebrew tap repository exists.
 - [ ] `HOMEBREW_TAP_GITHUB_TOKEN` secret exists if publishing Homebrew.
-- [ ] npm package name is available.
 - [ ] Tag pushed.
 - [ ] GitHub Release created.
 - [ ] Homebrew install verified.
-- [ ] npm install verified.

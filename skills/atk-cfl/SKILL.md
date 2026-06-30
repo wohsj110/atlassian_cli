@@ -9,7 +9,7 @@ Use this skill when working with Confluence pages through `atk-cfl`.
 
 ## CLI Setup
 - Before using Confluence commands, check whether `atk-cfl` is available with `command -v atk-cfl`.
-- If missing, install the CLI with `brew install --cask wohsj110/tap/atk-cfl` or `npx @wohsj110/atlassian-agent-skill install-cli`.
+- If missing, install the CLI with `brew install --cask wohsj110/tap/atk-cfl`.
 - After installation, run `atk-cfl --help` to verify the binary.
 - If credentials are not configured, run `atk-cfl init` or ask the user for the non-secret URL/email setup preference. Never ask the user to paste secrets into chat; use stdin, environment variables, or the OS keyring flow.
 

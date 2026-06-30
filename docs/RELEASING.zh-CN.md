@@ -2,7 +2,7 @@
 
 [English](RELEASING.md)
 
-这份文档说明如何把 Atlassian Agent CLI 发布到 GitHub Releases、Homebrew 和 npm。
+这份文档说明如何把 Atlassian Agent CLI 发布到 GitHub Releases 和 Homebrew。
 
 ## 命名建议
 
@@ -10,7 +10,6 @@
 
 - GitHub 仓库：`wohsj110/atlassian_cli`
 - Homebrew cask 或 formula：`atk-jira`、`atk-cfl`
-- npm 包：`atlassian-agent-skill` 或 `@<owner>/atlassian-agent-skill`
 - 二进制命令：`atk-jira`、`atk-cfl`
 
 `atk-*` 是当前计划使用的公开命令名。它比 `atlassian-jira` / `atlassian-confluence` 短，同时比泛用缩写更不容易冲突。
@@ -21,7 +20,6 @@
 
 ```bash
 go test ./shared/... ./tools/atk-jira/... ./tools/atk-cfl/...
-npm test --prefix npm/skill-installer
 goreleaser check
 goreleaser release --snapshot --clean
 ```
@@ -161,67 +159,25 @@ atk-jira --help
 atk-cfl --help
 ```
 
-## npm Skill Installer
-
-npm 包在 `npm/skill-installer`。
-
-先检查发布内容：
-
-```bash
-cd npm/skill-installer
-npm test
-npm pack --dry-run
-npm publish --dry-run
-```
-
-正式发布：
-
-```bash
-npm login
-npm publish
-```
-
-如果发布 scoped package：
-
-```bash
-npm publish --access public
-```
-
-发布后安装：
-
-```bash
-npx atlassian-agent-skill install
-```
-
-如果是 scoped package：
-
-```bash
-npx @<owner>/atlassian-agent-skill install
-```
-
 ## 版本策略
 
-默认让 CLI 和 skill installer 保持同版本，除非后续有明确理由拆分。
+两个 CLI 二进制使用同一个版本 tag。
 
 每次发布：
 
-1. 更新 `npm/skill-installer/package.json`。
-2. 提交版本变更。
-3. 打 tag，例如 `v0.1.0`。
-4. 推送 tag。
-5. 发布 npm 包。
+1. 提交发布前变更。
+2. 打 tag，例如 `v0.1.0`。
+3. 推送 tag。
+4. 验证 GitHub Release assets 和 Homebrew 安装。
 
 ## 发布 Checklist
 
 - [ ] `go test ./shared/... ./tools/atk-jira/... ./tools/atk-cfl/...` 通过。
-- [ ] `npm test --prefix npm/skill-installer` 通过。
 - [ ] `goreleaser check` 通过。
 - [ ] `goreleaser release --snapshot --clean` 通过。
 - [ ] GitHub 主仓库已创建。
 - [ ] Homebrew tap 仓库已创建。
 - [ ] 如果发布 Homebrew，`HOMEBREW_TAP_GITHUB_TOKEN` secret 已配置。
-- [ ] npm 包名可用。
 - [ ] tag 已推送。
 - [ ] GitHub Release 已创建。
 - [ ] Homebrew 安装已验证。
-- [ ] npm 安装已验证。

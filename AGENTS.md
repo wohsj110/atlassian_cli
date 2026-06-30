@@ -76,10 +76,6 @@ Confluence:
 - `atk-cfl page create`
 - `atk-cfl page edit ID`
 
-Skill installer:
-- `npx atlassian-agent-skill install`
-- Installs Jira and Confluence skills into supported agent skill directories.
-
 ## Testing
 - Unit-test query builders, output rendering, config loading, and error normalization.
 - Use mocked HTTP clients for API behavior.
@@ -89,8 +85,6 @@ Skill installer:
 ## Release
 - Use GoReleaser for binaries.
 - Homebrew installs CLI binaries.
-- npm package installs skills only.
-- Keep CLI and skill installer versioned together unless there is a reason to split.
 
 ## Inspiration
 Useful references may inform:
