@@ -4,7 +4,7 @@ Homebrew packaging is managed automatically by [GoReleaser](https://goreleaser.c
 
 ## Configuration
 
-The Homebrew cask configuration lives in [`.goreleaser.yml`](../../.goreleaser.yml) under the `homebrew_casks` section.
+The Homebrew cask configuration lives in [`.goreleaser.yml`](../../../../.goreleaser.yml) under the `homebrew_casks` section.
 
 ## Tap Repository
 
@@ -13,5 +13,5 @@ The generated cask is published to: https://github.com/wohsj110/homebrew-tap
 ## Installation
 
 ```bash
-brew install open-cli-collective/tap/atk-cfl
+brew install --cask wohsj110/tap/atk-cfl
 ```

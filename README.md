@@ -24,6 +24,32 @@ Implemented:
 - Shared Atlassian client, keyring/credential store, output presenters, and command-surface parity tests.
 - GoReleaser build configuration for `atk-jira` and `atk-cfl`.
 
+## Install with Homebrew
+
+After a release is published, install the CLI binaries with Homebrew:
+
+```bash
+brew install --cask wohsj110/tap/atk-jira
+brew install --cask wohsj110/tap/atk-cfl
+```
+
+Or tap first:
+
+```bash
+brew tap wohsj110/tap
+brew install --cask atk-jira
+brew install --cask atk-cfl
+```
+
+Verify the installed commands:
+
+```bash
+atk-jira --help
+atk-cfl --help
+```
+
+If Homebrew cannot find the packages, the release tag has not been published to the tap yet. See [docs/RELEASING.md](docs/RELEASING.md).
+
 ## Install for Local Development
 
 ```bash
@@ -201,7 +227,7 @@ Long payloads should require explicit flags such as `--body`, `--comments`, or `
 Run tests:
 
 ```bash
-go test ./...
+go test ./shared/... ./tools/atk-jira/... ./tools/atk-cfl/...
 npm test --prefix npm/skill-installer
 ```
 

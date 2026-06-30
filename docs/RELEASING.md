@@ -20,7 +20,7 @@ The `atk-*` names are the intended public command names. They are shorter than `
 Run the full local verification:
 
 ```bash
-go test ./...
+go test ./shared/... ./tools/atk-jira/... ./tools/atk-cfl/...
 npm test --prefix npm/skill-installer
 goreleaser check
 goreleaser release --snapshot --clean
@@ -87,8 +87,8 @@ The workflow should give `contents: write` permission and run GoReleaser with a 
 Recommended install shape:
 
 ```bash
-brew install --cask <owner>/tap/atk-jira
-brew install --cask <owner>/tap/atk-cfl
+brew install --cask wohsj110/tap/atk-jira
+brew install --cask wohsj110/tap/atk-cfl
 ```
 
 Those packages install the public binaries:
@@ -112,31 +112,27 @@ HOMEBREW_TAP_GITHUB_TOKEN
 
 The token must be able to write to `wohsj110/homebrew-tap`.
 
-The current `.goreleaser.yml` renders Homebrew casks with `skip_upload: true`.
-That keeps GoReleaser checks local and avoids writing to the tap from developer
-machines. Your release workflow should commit the rendered `atk-jira` and
-`atk-cfl` casks to the tap, or you can remove `skip_upload: true` and provide the
-tap token in CI:
+The current `.goreleaser.yml` publishes Homebrew casks to the tap. GoReleaser
+v2.16 deprecates the old `brews` formula generator for prebuilt binaries, so the
+supported Homebrew path is cask-based.
 
 ```yaml
 homebrew_casks:
   - name: atk-jira
-    skip_upload: false
     repository:
-      owner: <owner>
+      owner: wohsj110
       name: homebrew-tap
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
   - name: atk-cfl
-    skip_upload: false
     repository:
-      owner: <owner>
+      owner: wohsj110
       name: homebrew-tap
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
 ```
 
-Each cask should install one binary:
+Each cask installs one binary:
 
 ```yaml
     binaries:
@@ -159,7 +155,7 @@ git push origin v0.1.0
 After release:
 
 ```bash
-brew tap <owner>/tap
+brew tap wohsj110/tap
 brew install --cask atk-jira
 brew install --cask atk-cfl
 atk-jira --help
@@ -218,7 +214,7 @@ For each release:
 
 ## Release Checklist
 
-- [ ] `go test ./...` passes.
+- [ ] `go test ./shared/... ./tools/atk-jira/... ./tools/atk-cfl/...` passes.
 - [ ] `npm test --prefix npm/skill-installer` passes.
 - [ ] `goreleaser check` passes.
 - [ ] `goreleaser release --snapshot --clean` passes.

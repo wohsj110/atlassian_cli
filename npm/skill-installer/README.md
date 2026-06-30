@@ -52,9 +52,8 @@ npx @wohsj110/atlassian-agent-skill add atlassian-agent --install-cli
 The CLI installer uses Homebrew when available:
 
 ```bash
-brew tap wohsj110/tap
-brew install --cask atk-jira
-brew install --cask atk-cfl
+brew install --cask wohsj110/tap/atk-jira
+brew install --cask wohsj110/tap/atk-cfl
 ```
 
 ## Install for One Agent

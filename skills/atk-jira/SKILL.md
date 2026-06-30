@@ -9,7 +9,7 @@ Use this skill when working with Jira issues through `atk-jira`.
 
 ## CLI Setup
 - Before using Jira commands, check whether `atk-jira` is available with `command -v atk-jira`.
-- If missing, install the CLI with `npx @wohsj110/atlassian-agent-skill install-cli` or `brew tap wohsj110/tap && brew install --cask atk-jira`.
+- If missing, install the CLI with `brew install --cask wohsj110/tap/atk-jira` or `npx @wohsj110/atlassian-agent-skill install-cli`.
 - After installation, run `atk-jira --help` to verify the binary.
 - If credentials are not configured, run `atk-jira init` or ask the user for the non-secret URL/email setup preference. Never ask the user to paste secrets into chat; use stdin, environment variables, or the OS keyring flow.
 

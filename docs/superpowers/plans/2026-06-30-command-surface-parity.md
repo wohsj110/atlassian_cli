@@ -81,14 +81,14 @@
 - [ ] Add optional Confluence integration tests gated by `ATK_CONFLUENCE_INTEGRATION=1`.
 - [ ] Ensure no default CI path requires credentials.
 - [ ] Ensure no command logs secrets in verbose output, errors, config output, or tests.
-- [ ] Run `go test ./...`.
+- [ ] Run `go test ./shared/... ./tools/atk-jira/... ./tools/atk-cfl/...`.
 - [ ] Run `npm test --prefix npm/skill-installer`.
 - [ ] Run local build smoke for both binaries.
 
 ## Current Manual Verification Commands
 
 ```bash
-go test ./...
+go test ./shared/... ./tools/atk-jira/... ./tools/atk-cfl/...
 npm test --prefix npm/skill-installer
 tmpdir=$(mktemp -d)
 go build -o "$tmpdir/atk-jira" ./tools/atk-jira/cmd/atk-jira
@@ -99,8 +99,6 @@ go build -o "$tmpdir/atk-cfl" ./tools/atk-cfl/cmd/atk-cfl
 
 ## Compatibility Notes
 
-- Upstream `jtk` maps to `atk-jira`.
-- Upstream `cfl` maps to `atk-cfl`.
 - Keep MIT attribution in `NOTICE.md`.
 - Do not copy large source files unless the copied component is explicitly listed in `NOTICE.md`.
 - Compatibility aliases can preserve current early commands while the plural the command contract surface lands.

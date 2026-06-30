@@ -93,9 +93,7 @@ function installCLI() {
 
   if (hasCommand("brew")) {
     console.log("Installing CLI binaries with Homebrew...");
-    const tap = run("brew", ["tap", "wohsj110/tap"], { stdio: "inherit" });
-    if (tap.status !== 0) return tap.status || 1;
-    for (const cask of ["atk-jira", "atk-cfl"]) {
+    for (const cask of ["wohsj110/tap/atk-jira", "wohsj110/tap/atk-cfl"]) {
       const result = run("brew", ["install", "--cask", cask], { stdio: "inherit" });
       if (result.status !== 0) return result.status || 1;
     }

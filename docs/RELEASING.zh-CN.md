@@ -20,7 +20,7 @@
 运行完整本地验证：
 
 ```bash
-go test ./...
+go test ./shared/... ./tools/atk-jira/... ./tools/atk-cfl/...
 npm test --prefix npm/skill-installer
 goreleaser check
 goreleaser release --snapshot --clean
@@ -86,8 +86,8 @@ workflow 需要 `contents: write` 权限，并使用可以创建 release 的 tok
 推荐安装形态：
 
 ```bash
-brew install --cask <owner>/tap/atk-jira
-brew install --cask <owner>/tap/atk-cfl
+brew install --cask wohsj110/tap/atk-jira
+brew install --cask wohsj110/tap/atk-cfl
 ```
 
 这两个包分别安装公开命令：
@@ -111,23 +111,21 @@ HOMEBREW_TAP_GITHUB_TOKEN
 
 这个 token 必须能写入 `wohsj110/homebrew-tap`。
 
-当前 `.goreleaser.yml` 使用 `skip_upload: true` 渲染 Homebrew cask。这样本地
-GoReleaser check 不会写 tap。正式 release workflow 需要把渲染出来的 `atk-jira`
-和 `atk-cfl` cask 提交到 tap；或者在 CI 里移除 `skip_upload: true` 并提供 tap token：
+当前 `.goreleaser.yml` 会把 Homebrew cask 发布到 tap。GoReleaser v2.16
+已经废弃面向预编译二进制的旧 `brews` formula 生成器，所以支持的 Homebrew
+路径是 cask。
 
 ```yaml
 homebrew_casks:
   - name: atk-jira
-    skip_upload: false
     repository:
-      owner: <owner>
+      owner: wohsj110
       name: homebrew-tap
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
   - name: atk-cfl
-    skip_upload: false
     repository:
-      owner: <owner>
+      owner: wohsj110
       name: homebrew-tap
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
@@ -156,7 +154,7 @@ git push origin v0.1.0
 发布后验证：
 
 ```bash
-brew tap <owner>/tap
+brew tap wohsj110/tap
 brew install --cask atk-jira
 brew install --cask atk-cfl
 atk-jira --help
@@ -215,7 +213,7 @@ npx @<owner>/atlassian-agent-skill install
 
 ## 发布 Checklist
 
-- [ ] `go test ./...` 通过。
+- [ ] `go test ./shared/... ./tools/atk-jira/... ./tools/atk-cfl/...` 通过。
 - [ ] `npm test --prefix npm/skill-installer` 通过。
 - [ ] `goreleaser check` 通过。
 - [ ] `goreleaser release --snapshot --clean` 通过。
