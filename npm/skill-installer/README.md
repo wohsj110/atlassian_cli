@@ -4,16 +4,30 @@ Install the `atk-jira` and `atk-cfl` agent skills for Codex and Claude Code.
 
 ## Quick Install
 
-Preferred install through the open skills CLI:
+Preferred install through the open `skills` CLI.
+
+Codex + Jira only:
 
 ```bash
-npx skills add https://github.com/wohsj110/atlassian_cli \
-  --skill atk-jira \
-  --skill atk-cfl \
-  --agent codex \
-  --agent claude-code \
-  --global \
-  --yes
+npx skills add https://github.com/wohsj110/atlassian_cli --skill atk-jira --agent codex --global --yes
+```
+
+Codex + Confluence only:
+
+```bash
+npx skills add https://github.com/wohsj110/atlassian_cli --skill atk-cfl --agent codex --global --yes
+```
+
+Claude Code + Jira only:
+
+```bash
+npx skills add https://github.com/wohsj110/atlassian_cli --skill atk-jira --agent claude-code --global --yes
+```
+
+Claude Code + Confluence only:
+
+```bash
+npx skills add https://github.com/wohsj110/atlassian_cli --skill atk-cfl --agent claude-code --global --yes
 ```
 
 Project-specific npm helper:
@@ -22,11 +36,12 @@ Project-specific npm helper:
 npx @wohsj110/atlassian-agent-skill add atlassian-agent
 ```
 
-This installs:
+This helper installs:
 
-- `atk-jira` into `~/.codex/skills` and `~/.claude/skills` when using this npm helper
-- `atk-cfl` into `~/.codex/skills` and `~/.claude/skills` when using this npm helper
-- Official `npx skills` installs Codex skills into `~/.agents/skills`
+- `atk-jira` into `~/.codex/skills` and `~/.claude/skills`
+- `atk-cfl` into `~/.codex/skills` and `~/.claude/skills`
+
+The open `npx skills` CLI installs Codex skills into `~/.agents/skills`.
 
 ## Install Skills and CLI
 

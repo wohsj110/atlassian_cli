@@ -96,7 +96,55 @@ atk-cfl page view 123456 --content-only
 
 ## Agent Skills
 
-Install through the open `skills` CLI:
+The easiest install path is the open `skills` CLI. Pick the agent and skill you need.
+
+### Codex
+
+Install only Jira support for Codex:
+
+```bash
+npx skills add https://github.com/wohsj110/atlassian_cli \
+  --skill atk-jira \
+  --agent codex \
+  --global \
+  --yes
+```
+
+Install only Confluence support for Codex:
+
+```bash
+npx skills add https://github.com/wohsj110/atlassian_cli \
+  --skill atk-cfl \
+  --agent codex \
+  --global \
+  --yes
+```
+
+### Claude Code
+
+Install only Jira support for Claude Code:
+
+```bash
+npx skills add https://github.com/wohsj110/atlassian_cli \
+  --skill atk-jira \
+  --agent claude-code \
+  --global \
+  --yes
+```
+
+Install only Confluence support for Claude Code:
+
+```bash
+npx skills add https://github.com/wohsj110/atlassian_cli \
+  --skill atk-cfl \
+  --agent claude-code \
+  --global \
+  --yes
+```
+
+### Install Everything
+
+Install both skills for both Codex and Claude Code:
 
 ```bash
 npx skills add https://github.com/wohsj110/atlassian_cli \
@@ -119,43 +167,20 @@ After skills.sh indexes this repository, the stable skill IDs are:
 - `wohsj110/atlassian_cli/atk-jira`
 - `wohsj110/atlassian_cli/atk-cfl`
 
-Install through this project's npm helper:
+Install targets used by the open `skills` CLI:
 
-```bash
-npx @wohsj110/atlassian-agent-skill add atlassian-agent
-```
-
-Install skills and CLI binaries in one step:
-
-```bash
-npx @wohsj110/atlassian-agent-skill add atlassian-agent --install-cli
-```
-
-Install for only one agent:
-
-```bash
-npx @wohsj110/atlassian-agent-skill add atlassian-agent --target codex
-npx @wohsj110/atlassian-agent-skill add atlassian-agent --target claude
-```
-
-The default install targets are:
-
-- Codex via `npx skills`: `~/.agents/skills`
-- Codex via npm helper: `~/.codex/skills`
+- Codex: `~/.agents/skills`
 - Claude Code: `~/.claude/skills`
-
-Both installation methods copy:
-
-- `atk-jira/SKILL.md`
-- `atk-jira/CliReference.md`
-- `atk-cfl/SKILL.md`
-- `atk-cfl/CliReference.md`
 
 Each installed skill can help the agent check for `atk-jira` / `atk-cfl` and install the missing CLI with Homebrew or the npm helper.
 
-Check the installation:
+### Optional Helper
+
+This project also publishes an npm helper for installing both skills and checking the CLI:
 
 ```bash
+npx @wohsj110/atlassian-agent-skill add atlassian-agent
+npx @wohsj110/atlassian-agent-skill add atlassian-agent --install-cli
 npx @wohsj110/atlassian-agent-skill doctor
 ```
 

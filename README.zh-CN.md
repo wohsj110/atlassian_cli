@@ -96,7 +96,55 @@ atk-cfl page view 123456 --content-only
 
 ## Agent Skills
 
-通过开放的 `skills` CLI 安装：
+最推荐使用开放的 `skills` CLI。你可以按 agent 和 skill 分开安装。
+
+### Codex
+
+只给 Codex 安装 Jira 支持：
+
+```bash
+npx skills add https://github.com/wohsj110/atlassian_cli \
+  --skill atk-jira \
+  --agent codex \
+  --global \
+  --yes
+```
+
+只给 Codex 安装 Confluence 支持：
+
+```bash
+npx skills add https://github.com/wohsj110/atlassian_cli \
+  --skill atk-cfl \
+  --agent codex \
+  --global \
+  --yes
+```
+
+### Claude Code
+
+只给 Claude Code 安装 Jira 支持：
+
+```bash
+npx skills add https://github.com/wohsj110/atlassian_cli \
+  --skill atk-jira \
+  --agent claude-code \
+  --global \
+  --yes
+```
+
+只给 Claude Code 安装 Confluence 支持：
+
+```bash
+npx skills add https://github.com/wohsj110/atlassian_cli \
+  --skill atk-cfl \
+  --agent claude-code \
+  --global \
+  --yes
+```
+
+### 一次安装全部
+
+同时给 Codex 和 Claude Code 安装 Jira / Confluence 两个 skills：
 
 ```bash
 npx skills add https://github.com/wohsj110/atlassian_cli \
@@ -119,43 +167,20 @@ skills.sh 完成索引后，稳定 skill ID 是：
 - `wohsj110/atlassian_cli/atk-jira`
 - `wohsj110/atlassian_cli/atk-cfl`
 
-也可以通过本项目自己的 npm helper 安装：
+开放 `skills` CLI 使用的安装目标：
 
-```bash
-npx @wohsj110/atlassian-agent-skill add atlassian-agent
-```
-
-一键安装 skills 和 CLI 二进制：
-
-```bash
-npx @wohsj110/atlassian-agent-skill add atlassian-agent --install-cli
-```
-
-只安装到某一个 agent：
-
-```bash
-npx @wohsj110/atlassian-agent-skill add atlassian-agent --target codex
-npx @wohsj110/atlassian-agent-skill add atlassian-agent --target claude
-```
-
-默认安装目标：
-
-- 通过 `npx skills` 安装到 Codex：`~/.agents/skills`
-- 通过 npm helper 安装到 Codex：`~/.codex/skills`
+- Codex：`~/.agents/skills`
 - Claude Code：`~/.claude/skills`
-
-两种安装方式都会复制：
-
-- `atk-jira/SKILL.md`
-- `atk-jira/CliReference.md`
-- `atk-cfl/SKILL.md`
-- `atk-cfl/CliReference.md`
 
 安装后的 skill 自身会指导 agent 检查 `atk-jira` / `atk-cfl` 是否存在，并在缺失时通过 Homebrew 或 npm helper 安装 CLI。
 
-检查安装状态：
+### 可选 npm helper
+
+本项目也提供 npm helper，用于安装两个 skills 并检查 CLI：
 
 ```bash
+npx @wohsj110/atlassian-agent-skill add atlassian-agent
+npx @wohsj110/atlassian-agent-skill add atlassian-agent --install-cli
 npx @wohsj110/atlassian-agent-skill doctor
 ```
 
