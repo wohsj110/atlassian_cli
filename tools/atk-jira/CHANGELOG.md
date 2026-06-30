@@ -53,7 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Consolidated markdown-to-ADF conversion into shared package
 - Improved init/config UX with huh forms and --force flag on clear
-- **Binary renamed to `atk-jira`** - The CLI binary is now `atk-jira` (short for atk-jira). Install via `brew install atk-jira`, run with `atk-jira`. ([#41](https://github.com/wohsj110/atlassian_cli/tools/atk-jira/pull/41))
+- **Binary renamed to `atk-jira`** - The CLI binary is now `atk-jira`. Install via `brew install --cask wohsj110/tap/atk-jira`, run with `atk-jira`. ([#41](https://github.com/wohsj110/atlassian_cli/tools/atk-jira/pull/41))
 - Module path migrated to `github.com/wohsj110/atlassian_cli/tools/atk-jira` ([#39](https://github.com/wohsj110/atlassian_cli/tools/atk-jira/pull/39))
 
 ### Fixed

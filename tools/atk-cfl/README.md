@@ -1,6 +1,6 @@
 # atk-cfl - Confluence CLI
 
-A command-line interface for Atlassian Confluence Cloud, inspired by [jira-cli](https://github.com/ankitpokhrel/jira-cli).
+A command-line interface for Atlassian Confluence Cloud.
 
 ## Features
 
@@ -22,10 +22,10 @@ A command-line interface for Atlassian Confluence Cloud, inspired by [jira-cli](
 **Homebrew (recommended)**
 
 ```bash
-brew install open-cli-collective/tap/atk-cfl
+brew install --cask wohsj110/tap/atk-cfl
 ```
 
-> Note: This installs from our third-party tap. The formula is not yet in Homebrew core.
+> Note: This installs from the `wohsj110/tap` Homebrew tap.
 
 **Binary download**
 
@@ -55,55 +55,11 @@ Download from the [Releases page](https://github.com/wohsj110/atlassian_cli/rele
 
 ### Linux
 
-**APT (Debian/Ubuntu) - Recommended**
-
-```bash
-# Add the GPG key
-curl -fsSL https://open-cli-collective.github.io/linux-packages/keys/gpg.asc | sudo gpg --dearmor -o /usr/share/keyrings/open-cli-collective.gpg
-
-# Add the repository
-echo "deb [signed-by=/usr/share/keyrings/open-cli-collective.gpg] https://open-cli-collective.github.io/linux-packages/apt stable main" | sudo tee /etc/apt/sources.list.d/open-cli-collective.list
-
-# Update and install
-sudo apt update
-sudo apt install atk-cfl
-```
-
-> Note: This is our third-party APT repository, not the official Debian/Ubuntu repos.
-
-**DNF/YUM (Fedora/RHEL/CentOS)**
-
-```bash
-# Add the repository
-sudo tee /etc/yum.repos.d/open-cli-collective.repo << 'EOF'
-[open-cli-collective]
-name=wohsj110
-baseurl=https://open-cli-collective.github.io/linux-packages/rpm
-enabled=1
-gpgcheck=1
-gpgkey=https://open-cli-collective.github.io/linux-packages/keys/gpg.asc
-EOF
-
-# Install
-sudo dnf install atk-cfl
-```
-
-> Note: This is our third-party RPM repository, not the official Fedora/RHEL repos.
-
 **Homebrew**
 
 ```bash
-brew install open-cli-collective/tap/atk-cfl
+brew install --cask wohsj110/tap/atk-cfl
 ```
-
-**Snap**
-
-```bash
-sudo snap install ocli-confluence
-sudo snap alias ocli-confluence atk-cfl  # Optional: create 'atk-cfl' alias
-```
-
-> Note: Snap package is pending store approval. Check availability at https://snapcraft.io/ocli-confluence
 
 **Binary download**
 

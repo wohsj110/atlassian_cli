@@ -109,6 +109,11 @@ HOMEBREW_TAP_GITHUB_TOKEN
 ```
 
 The token must be able to write to `wohsj110/homebrew-tap`.
+Set it before relying on tag-triggered CI releases:
+
+```bash
+gh secret set HOMEBREW_TAP_GITHUB_TOKEN --repo wohsj110/atlassian_cli
+```
 
 The current `.goreleaser.yml` publishes Homebrew casks to the tap. GoReleaser
 v2.16 deprecates the old `brews` formula generator for prebuilt binaries, so the

@@ -108,6 +108,11 @@ HOMEBREW_TAP_GITHUB_TOKEN
 ```
 
 这个 token 必须能写入 `wohsj110/homebrew-tap`。
+在依赖 tag 触发的 CI 发布前，先配置这个 secret：
+
+```bash
+gh secret set HOMEBREW_TAP_GITHUB_TOKEN --repo wohsj110/atlassian_cli
+```
 
 当前 `.goreleaser.yml` 会把 Homebrew cask 发布到 tap。GoReleaser v2.16
 已经废弃面向预编译二进制的旧 `brews` formula 生成器，所以支持的 Homebrew

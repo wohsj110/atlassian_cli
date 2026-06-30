@@ -25,10 +25,10 @@ A command-line interface for managing Jira Cloud tickets.
 **Homebrew (recommended)**
 
 ```bash
-brew install open-cli-collective/tap/atk-jira
+brew install --cask wohsj110/tap/atk-jira
 ```
 
-> Note: This installs from our third-party tap.
+> Note: This installs from the `wohsj110/tap` Homebrew tap.
 
 ---
 
@@ -50,49 +50,6 @@ winget install wohsj110.atk-jira
 
 ### Linux
 
-**Snap**
-
-```bash
-sudo snap install ocli-jira
-```
-
-> Note: After installation, the command is available as `atk-jira`.
-
-**APT (Debian/Ubuntu)**
-
-```bash
-# Add the GPG key
-curl -fsSL https://open-cli-collective.github.io/linux-packages/keys/gpg.asc | sudo gpg --dearmor -o /usr/share/keyrings/open-cli-collective.gpg
-
-# Add the repository
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/open-cli-collective.gpg] https://open-cli-collective.github.io/linux-packages/apt stable main" | sudo tee /etc/apt/sources.list.d/open-cli-collective.list
-
-# Install
-sudo apt update
-sudo apt install atk-jira
-```
-
-> Note: This is our third-party APT repository, not official Debian/Ubuntu repos.
-
-**DNF/YUM (Fedora/RHEL/CentOS)**
-
-```bash
-# Add the repository
-sudo tee /etc/yum.repos.d/open-cli-collective.repo << 'EOF'
-[open-cli-collective]
-name=wohsj110
-baseurl=https://open-cli-collective.github.io/linux-packages/rpm
-enabled=1
-gpgcheck=1
-gpgkey=https://open-cli-collective.github.io/linux-packages/keys/gpg.asc
-EOF
-
-# Install
-sudo dnf install atk-jira
-```
-
-> Note: This is our third-party RPM repository, not official Fedora/RHEL repos.
-
 **Binary download**
 
 Download `.deb`, `.rpm`, or `.tar.gz` from the [Releases page](https://github.com/wohsj110/atlassian_cli/releases) - available for x64 and ARM64.
@@ -103,8 +60,8 @@ curl -LO https://github.com/wohsj110/atlassian_cli/releases/latest/download/atk-
 sudo dpkg -i atk-jira_VERSION_linux_amd64.deb
 
 # Direct .rpm install
-curl -LO https://github.com/wohsj110/atlassian_cli/releases/latest/download/atk-jira-VERSION.x86_64.rpm
-sudo rpm -i atk-jira-VERSION.x86_64.rpm
+curl -LO https://github.com/wohsj110/atlassian_cli/releases/latest/download/atk-jira_VERSION_linux_amd64.rpm
+sudo rpm -i atk-jira_VERSION_linux_amd64.rpm
 ```
 
 ---
