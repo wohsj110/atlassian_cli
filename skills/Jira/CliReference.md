@@ -1,0 +1,242 @@
+# atk-jira CLI Reference
+
+> **Covers:** atk-jira v1.0.84
+
+Reference for the `atk-jira` command line tool.
+
+## Authentication
+
+**Config file** (recommended): typical paths — `~/.config/atk-jira/config.json` (Linux), `~/Library/Application Support/atk-jira/config.json` (macOS). Run `atk-jira config show` for the resolved path on your system.
+
+Set up interactively:
+```bash
+atk-jira init
+```
+
+Verify:
+```bash
+atk-jira config test    # reports connection + identity
+atk-jira config show    # shows config path + current values (credentials masked)
+```
+
+Prompts for: Atlassian instance URL, email, API token (from https://id.atlassian.com/manage-profile/security/api-tokens).
+
+**Env-var auth** (alternative / overrides): precedence `JIRA_*` → `ATLASSIAN_*` → config. Primary vars: `*_URL`, `*_EMAIL`, `*_API_TOKEN`, `*_AUTH_METHOD` (`basic` or `bearer`), `*_CLOUD_ID` (bearer only). Use `ATLASSIAN_*` for credentials shared with `atk-cfl` (Confluence CLI). `JIRA_DEFAULT_PROJECT` sets a default project key.
+
+**Bearer auth** (scoped service account tokens): Does NOT support Agile operations (boards, sprints, automation, dashboards) due to Atlassian platform limitations. Requires a Cloud ID — find it at `https://your-site.atlassian.net/_edge/tenant_info`. Use classic API token auth for full functionality.
+
+## Global Flags
+
+| Flag | Description |
+|------|-------------|
+| `--extended` | Include admin/schema/audit fields in output |
+| `--fulltext` | Disable truncation of descriptions and comments (`--no-truncate` is a deprecated alias kept during migration) |
+| `--id` | Emit only the primary identifier (useful for scripting). Takes precedence over `--extended` and `--fulltext` |
+| `--no-color` | Disable colored output |
+| `-v, --verbose` | Enable verbose output |
+
+> `automation export` is the only command that emits JSON. Use `--id` for scripting composition.
+
+## Command Structure
+
+```
+atk-jira [resource] [action] [KEY/ID] [flags]
+```
+
+## Current User
+
+| Command | Description |
+|---------|-------------|
+| `atk-jira me` | Show current authenticated user (account ID, name, email) |
+| `atk-jira me --id` | Print just the account ID (script-friendly) |
+| `atk-jira me --extended` | Include timezone, locale, active status, group/role counts |
+
+## Issues
+
+| Command | Description |
+|---------|-------------|
+| `atk-jira issues list --project KEY` | List issues in project |
+| `atk-jira issues list --project KEY --sprint current` | List issues in current sprint |
+| `atk-jira issues get PROJ-123` | Get issue details |
+| `atk-jira issues create --project KEY --type TYPE --summary "TEXT"` | Create issue |
+| `atk-jira issues update PROJ-123 --field FIELD=VALUE` | Update issue fields |
+| `atk-jira issues search --jql "JQL"` | Search with JQL query (flag is **required**) |
+| `atk-jira issues update PROJ-123 --assignee VALUE` | Assign issue. Resolver accepts `me`, email, display name, or raw account ID |
+| `atk-jira issues update PROJ-123 --assignee none` | Unassign via update |
+| `atk-jira issues assign PROJ-123 VALUE` | Dedicated assign command; same resolver inputs as `--assignee` (user is a positional arg, not a flag) |
+| `atk-jira issues assign PROJ-123 --unassign` | Unassign via dedicated command (equivalent to `--assignee none` on update) |
+| `atk-jira issues move PROJ-1 [PROJ-2 ...] --to-project NEWPROJ` | Move one or more issues to another project (Jira Cloud only). By default synchronous — waits for completion. Max 1000 issues per request. See move flags below |
+| `atk-jira issues move-status TASK_ID` | Check status of an async move operation (used with `--no-wait`) |
+| `atk-jira issues delete PROJ-123` | Permanently delete an issue. Interactive `y/N` prompt by default (prompt goes to stderr, reads from stdin); pass `--force` to skip. Destructive and irreversible |
+| `atk-jira issues types --project KEY` | List valid issue types for a project (columns: `ID`, `NAME`, `SUBTASK`; use values from `NAME` as `--type` on create). Supports `--id`, `--extended` (adds `DESCRIPTION_KEY`) |
+| `atk-jira issues fields [PROJ-123]` | List available fields (all fields, or editable fields for a specific issue) |
+| `atk-jira issues field-options FIELD_NAME_OR_ID [--issue PROJ-123]` | List allowed values for a field (e.g. priority, custom selects) |
+
+### Create Flags
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--project KEY` / `-p` | Yes | Project key |
+| `--type TYPE` / `-t` | No | Issue type (default Task). Task, Bug, Story, Epic, Sub-task |
+| `--summary "TEXT"` / `-s` | Yes | Issue title |
+| `--description "TEXT"` / `-d` | No | Issue description |
+| `--assignee VALUE` / `-a` | No | Assignee (resolver accepts `me`, email, display name, or raw account ID) |
+| `--parent KEY` | No | Parent issue key (epic or parent) |
+| `--field NAME=VALUE` / `-f` | No | Set custom field (repeatable) |
+
+### Update Flags
+
+| Flag | Description |
+|------|-------------|
+| `--summary "TEXT"` / `-s` | New summary |
+| `--description "TEXT"` / `-d` | New description |
+| `--assignee VALUE` / `-a` | Reassign (resolver accepts `me`, email, display name, or raw account ID; use `none` to unassign). Note: `atk-jira issues update --help` flag text underclaims the resolver (omits display name) — the resolver implementation accepts all four, same as `issues create` and `issues assign` |
+| `--type TYPE` / `-t` | Change issue type (uses bulk move API) |
+| `--parent KEY` | Change parent/epic |
+| `--field NAME=VALUE` / `-f` | Update custom field (repeatable; repeating the same key accumulates values for multi-select fields) |
+
+**Notes:**
+- `atk-jira issues update` does **not** change workflow status. Use `atk-jira transitions do` for status changes (see Transitions below).
+- `--type` on update uses the Jira Cloud bulk-move API (different path than a plain edit) — safe, but behaves asynchronously.
+- `--description` and other text flags support `\n`, `\t`, `\\` escape sequences.
+
+### Move Flags (`atk-jira issues move`)
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--to-project KEY_OR_NAME` | Yes | Target project (accepts key or name) |
+| `--to-type TYPE` | No | Target issue type name. If omitted, uses the same type as the source issue (resolved via cache; may need `atk-jira refresh issuetypes` on a cold cache) |
+| `--wait` / `--no-wait` | No | `--wait` (default) polls the move task to completion; `--no-wait` returns the task ID immediately. Use `atk-jira issues move-status TASK_ID` to check an async move later |
+| `--notify` / `--no-notify` | No | `--notify` (default) sends Jira notifications for the move; `--no-notify` suppresses them |
+
+Positional: one or more `<issue-key>` (up to 1000 per request). Jira Cloud only — not available on Server or Data Center.
+
+### Search & List Flags (shared by `atk-jira issues search` and `atk-jira issues list`)
+
+| Flag | Description |
+|------|-------------|
+| `--jql "QUERY"` | JQL query string (required for `search`) |
+| `--project KEY` / `-p` | Filter by project key (for `list`) |
+| `--sprint current` / `-s current` | Filter by current sprint (for `list`) |
+| `--max N` / `-m N` | Maximum results (default 25; auto-paginates) |
+| `--next-page-token TOKEN` | Resume from previous page token |
+| `--all-fields` | Include all fields (e.g. description) |
+| `--fields summary,status,customfield_10005` | Comma-separated list of specific fields |
+
+### Common Issue Types
+
+Task, Bug, Story, Epic, Sub-task (instance-dependent)
+
+## Transitions (Workflow Status Changes)
+
+Status changes happen via `atk-jira transitions do`, **not** `atk-jira issues update`.
+
+| Command | Description |
+|---------|-------------|
+| `atk-jira transitions list PROJ-123` | List available transitions for issue |
+| `atk-jira transitions list PROJ-123 --extended` | Show required fields for each transition (renamed from `--fields` in v1.0.84) |
+| `atk-jira transitions do PROJ-123 "Transition Name"` | Apply transition by name |
+| `atk-jira transitions do PROJ-123 21` | Apply transition by numeric ID |
+| `atk-jira transitions do PROJ-123 "Done" --field NAME=VALUE` | Apply with required fields (only when `transitions list --extended` shows a required field) |
+
+Common transition names: "To Do", "In Progress", "In Review", "Done" (instance-dependent — always run `transitions list` first).
+
+> **Do not speculatively pass `--field resolution=Done` (or any other field) unless `atk-jira transitions list PROJ-123 --extended` explicitly shows it is required for the transition you're applying.** Many Jira workflows set resolution via post-function or hide it from the transition screen — speculatively providing `--field resolution=Done` will fail with "Field 'resolution' cannot be set. It is not on the appropriate screen, or unknown." In that case, re-run the transition without the `--field` flag.
+
+## Projects
+
+| Command | Description |
+|---------|-------------|
+| `atk-jira projects list` | List all projects (columns: `KEY`, `TYPE`, `LEAD`, `NAME`). Supports `--id`, `--fields`, `--extended` (adds `STYLE`, `ISSUE_TYPES`, `COMPONENTS` counts), `--next-page-token` |
+| `atk-jira projects get KEY` | Get project details. Supports `--id`, `--fields`, `--extended` (enumerates components) |
+
+## Sprints
+
+`--board` and sprint positional arguments accept either a numeric ID or a name (resolved via cache — see SKILL.md Cache Warming).
+
+| Command | Description |
+|---------|-------------|
+| `atk-jira sprints list --board ID_OR_NAME` | List sprints for board (columns: `ID`, `STATE`, `START`, `END`, `NAME`). Supports `--extended` (adds sprint goals, timestamps), `--id`, `--fields`, `--next-page-token` |
+| `atk-jira sprints current --board ID_OR_NAME` | Get active sprint. Sprint Goal requires `--extended` (not shown by default). Supports `--id`, `--fields` |
+| `atk-jira sprints issues SPRINT_ID_OR_NAME` | List issues in sprint. Supports `--extended`, `--id`, `--max`, `--next-page-token` |
+| `atk-jira sprints add SPRINT_ID_OR_NAME PROJ-1 PROJ-2 ...` | Add issues to sprint (issues are positional) |
+
+## Boards
+
+| Command | Description |
+|---------|-------------|
+| `atk-jira boards list` | List all boards (columns: `ID`, `TYPE`, `PROJECT`, `NAME`). Supports `--extended`, `--id`, `--fields`, `--next-page-token` |
+| `atk-jira boards get ID_OR_NAME` | Get board details. Supports `--extended` (shows board configuration: filter, columns), `--id`, `--fields` |
+
+## Links
+
+| Command | Description |
+|---------|-------------|
+| `atk-jira links list PROJ-123` | List links on an issue. Supports `--fields`, `--extended`, `--id` |
+| `atk-jira links create PROJ-123 PROJ-456 --type NAME` | Create a link between two issues. First issue is outward, second is inward (e.g., "A blocks B"). `--type` accepts canonical name (`Blocks`), outward verb (`blocks`), or inward verb (`is blocked by`) — inward verbs auto-swap the key ordering |
+| `atk-jira links delete LINK_ID` | Delete an issue link by numeric ID (use `atk-jira links list` to find IDs) |
+| `atk-jira links types` | List available link types for the instance (columns: `ID`, `NAME`, `OUTWARD`, `INWARD`). Supports `--fields`, `--id` |
+
+## Comments
+
+| Command | Description |
+|---------|-------------|
+| `atk-jira comments list PROJ-123` | List comments on issue. Supports `--fields` (columns: `ID`, `AUTHOR`, `CREATED`, `BODY`) |
+| `atk-jira comments add PROJ-123 --body "TEXT"` | Add comment (`--body` / `-b` is **required**; supports `\n`, `\t`, `\\` escapes) |
+| `atk-jira comments delete PROJ-123 COMMENT_ID` | Delete a comment |
+
+## Attachments
+
+| Command | Description |
+|---------|-------------|
+| `atk-jira attachments list PROJ-123` | List attachments on issue. Supports `--fields` |
+| `atk-jira attachments add PROJ-123 --file PATH` | Upload attachment (`--file` / `-f` repeatable for multiple) |
+| `atk-jira attachments get ATTACHMENT_ID` | Download attachment (alias: `download`) |
+| `atk-jira attachments get ATTACHMENT_ID --output ./dir/` | Download to specific directory |
+| `atk-jira attachments get ATTACHMENT_ID --output ./renamed.pdf` | Download with custom filename |
+| `atk-jira attachments delete ATTACHMENT_ID` | Delete attachment |
+
+## Users
+
+| Command | Description |
+|---------|-------------|
+| `atk-jira users search "QUERY"` | Search for users (columns: `ACCOUNT_ID`, `NAME`, `EMAIL`, `ACTIVE`). Supports `--extended` (adds `TIMEZONE`, `LOCALE`), `--id`, `--fields`, `--next-page-token` |
+| `atk-jira users search "QUERY" --max 1 --id` | Resolve a query to a single account ID (script-friendly) |
+| `atk-jira users get ACCOUNT_ID` | Get user details by account ID. Supports `--id`, `--fields` |
+| `atk-jira users get ACCOUNT_ID --id` | Echo just the account ID (useful in pipelines) |
+| `atk-jira me` | Show current authenticated user (see Current User section above) |
+
+## Common JQL Patterns
+
+| Intent | JQL |
+|--------|-----|
+| My open issues | `assignee = currentUser() AND status != Done` |
+| My in-progress | `assignee = currentUser() AND status = "In Progress"` |
+| Project bugs | `project = KEY AND type = Bug` |
+| High priority | `project = KEY AND priority = High` |
+| Updated this week | `project = KEY AND updated >= -7d` |
+| Created today | `project = KEY AND created >= startOfDay()` |
+| Unassigned | `project = KEY AND assignee is EMPTY` |
+| Sprint issues | `sprint in openSprints() AND project = KEY` |
+| Overdue | `project = KEY AND duedate < now() AND status != Done` |
+
+## Output
+
+- Data goes to stdout (pipeable)
+- Diagnostics/logs go to stderr
+- **Pagination continuation notices (`More results available ...`) go to STDOUT, not stderr** — this is intentional per `atk-jira`'s output contract, and applies even with `--id`. When using `--id` in command substitution or piping to a tool that reads line-by-line, size `--max` to match your expectation, or post-filter with `grep -oE '[A-Z]+-[0-9]+' | head -1` (or equivalent) to isolate just the identifier from any trailing notice.
+- Use `--id` global flag for just the primary identifier — works on both reads and mutations (useful when piping to another command; note the pagination caveat above)
+- **Mutation output:** non-destructive mutations (create, update, assign, transition, add) re-fetch the entity after writing and show the same detail block as the corresponding `get` command. Destructive mutations (delete, remove) emit a confirmation line only. `--id` on any mutation emits just the primary identifier (issue key, comment ID, etc.)
+- Use `--fulltext` global flag to disable truncation of descriptions/comments. `--fulltext` is a no-op when the body field is not selected via `--fields`
+- Use `--fields` (per-command) to select specific columns in table/block output. Invalid field names error before making API calls
+- Use standard shell tools for filtering: `atk-jira issues list --project KEY | grep "Bug"`
+
+## Scope of This Reference
+
+This reference covers `atk-jira`'s daily-use operator surface — issues, transitions, links, sprints, boards, comments, attachments, projects, users. It intentionally does **not** cover administrative surfaces, which are out of scope for the workflows in this skill:
+
+- `atk-jira fields` — custom field management (create, delete, restore, show, contexts, options). Note: `--custom` was renamed to `--custom-fields` on `fields list` in v1.0.84
+- `atk-jira dashboards` — dashboard and gadget management
+- `atk-jira automation` — automation rule management (list, export, create, update, enable/disable)
+
+These subcommands exist and work — run `atk-jira <subcommand> --help` for discovery, or use `atk-jira <subcommand> --help` for the full command reference.

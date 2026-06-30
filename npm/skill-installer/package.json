@@ -1,0 +1,16 @@
+{
+  "name": "atlassian-agent-skill",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Installer for Atlassian Agent CLI skills.",
+  "bin": {
+    "atlassian-agent-skill": "bin/install.js"
+  },
+  "scripts": {
+    "test": "node --check bin/install.js"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}

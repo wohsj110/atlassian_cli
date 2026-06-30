@@ -1,0 +1,79 @@
+package space
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/spf13/cobra"
+
+	"github.com/wohsj110/atlassian_cli/shared/prompt"
+
+	"github.com/wohsj110/atlassian_cli/tools/atk-cfl/internal/cmd/root"
+	atkpresent "github.com/wohsj110/atlassian_cli/tools/atk-cfl/internal/present"
+)
+
+type deleteOptions struct {
+	*root.Options
+	force bool
+}
+
+func newDeleteCmd(rootOpts *root.Options) *cobra.Command {
+	opts := &deleteOptions{Options: rootOpts}
+
+	cmd := &cobra.Command{
+		Use:   "delete <space-key>",
+		Short: "Delete a space",
+		Long:  `Delete a Confluence space by its key.`,
+		Example: `  # Delete a space
+  atk-cfl space delete TEST
+
+  # Delete without confirmation
+  atk-cfl space delete TEST --force`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDelete(cmd.Context(), args[0], opts)
+		},
+	}
+
+	cmd.Flags().BoolVarP(&opts.force, "force", "f", false, "Skip confirmation prompt")
+
+	return cmd
+}
+
+func runDelete(ctx context.Context, spaceKey string, opts *deleteOptions) error {
+	// §3.4: short-circuit BEFORE any side-effecting check so
+	// --non-interactive without --force returns ErrConfirmationRequired
+	// regardless of output-format validity, API auth/not-found, or
+	// network state. Other validation errors would mask the real cause.
+	if opts.NonInteractive && !opts.force {
+		return prompt.ErrConfirmationRequired
+	}
+
+	client, err := opts.APIClient()
+	if err != nil {
+		return err
+	}
+
+	space, err := client.GetSpaceByKey(ctx, spaceKey)
+	if err != nil {
+		return err
+	}
+
+	if !opts.force && !opts.NonInteractive {
+		_, _ = fmt.Fprintf(opts.Stderr, "About to delete space: %s (%s)\n", space.Name, space.Key)
+		_, _ = fmt.Fprint(opts.Stderr, "Are you sure? [y/N]: ")
+	}
+	confirmed, err := prompt.ConfirmOrFail(opts.force, opts.NonInteractive, opts.Stdin)
+	if err != nil {
+		return err
+	}
+	if !confirmed {
+		return atkpresent.Emit(opts.Options, atkpresent.PresentDeletionCancelled())
+	}
+
+	if err := client.DeleteSpace(ctx, spaceKey); err != nil {
+		return err
+	}
+
+	return atkpresent.Emit(opts.Options, atkpresent.SpacePresenter{}.PresentDelete(space))
+}

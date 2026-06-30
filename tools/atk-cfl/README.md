@@ -1,0 +1,999 @@
+# atk-cfl - Confluence CLI
+
+A command-line interface for Atlassian Confluence Cloud, inspired by [jira-cli](https://github.com/ankitpokhrel/jira-cli).
+
+## Features
+
+- Manage Confluence pages from the command line
+- **Markdown-first**: Write and view pages in markdown, auto-converted to/from Confluence format
+- List and browse spaces
+- Create, view, edit, copy, and delete pages
+- Inspect page history and view specific page versions
+- **Search content** using CQL (Confluence Query Language)
+- Upload, download, list, and delete attachments
+- Find unused (orphaned) attachments
+- Multiple text output formats (table, plain)
+- Open pages in browser
+
+## Installation
+
+### macOS
+
+**Homebrew (recommended)**
+
+```bash
+brew install open-cli-collective/tap/atk-cfl
+```
+
+> Note: This installs from our third-party tap. The formula is not yet in Homebrew core.
+
+**Binary download**
+
+Download from the [Releases page](https://github.com/wohsj110/atlassian_cli/releases) - available for Intel and Apple Silicon.
+
+---
+
+### Windows
+
+**Chocolatey**
+
+```powershell
+choco install atk-cfl
+```
+
+**Winget**
+
+```powershell
+winget install wohsj110.atk-cfl
+```
+
+**Binary download**
+
+Download from the [Releases page](https://github.com/wohsj110/atlassian_cli/releases) - available for x64 and ARM64.
+
+---
+
+### Linux
+
+**APT (Debian/Ubuntu) - Recommended**
+
+```bash
+# Add the GPG key
+curl -fsSL https://open-cli-collective.github.io/linux-packages/keys/gpg.asc | sudo gpg --dearmor -o /usr/share/keyrings/open-cli-collective.gpg
+
+# Add the repository
+echo "deb [signed-by=/usr/share/keyrings/open-cli-collective.gpg] https://open-cli-collective.github.io/linux-packages/apt stable main" | sudo tee /etc/apt/sources.list.d/open-cli-collective.list
+
+# Update and install
+sudo apt update
+sudo apt install atk-cfl
+```
+
+> Note: This is our third-party APT repository, not the official Debian/Ubuntu repos.
+
+**DNF/YUM (Fedora/RHEL/CentOS)**
+
+```bash
+# Add the repository
+sudo tee /etc/yum.repos.d/open-cli-collective.repo << 'EOF'
+[open-cli-collective]
+name=wohsj110
+baseurl=https://open-cli-collective.github.io/linux-packages/rpm
+enabled=1
+gpgcheck=1
+gpgkey=https://open-cli-collective.github.io/linux-packages/keys/gpg.asc
+EOF
+
+# Install
+sudo dnf install atk-cfl
+```
+
+> Note: This is our third-party RPM repository, not the official Fedora/RHEL repos.
+
+**Homebrew**
+
+```bash
+brew install open-cli-collective/tap/atk-cfl
+```
+
+**Snap**
+
+```bash
+sudo snap install ocli-confluence
+sudo snap alias ocli-confluence atk-cfl  # Optional: create 'atk-cfl' alias
+```
+
+> Note: Snap package is pending store approval. Check availability at https://snapcraft.io/ocli-confluence
+
+**Binary download**
+
+Download `.deb`, `.rpm`, or `.tar.gz` from the [Releases page](https://github.com/wohsj110/atlassian_cli/releases) - available for x64 and ARM64.
+
+```bash
+# Direct .deb install
+curl -LO https://github.com/wohsj110/atlassian_cli/releases/latest/download/atk-cfl_VERSION_linux_amd64.deb
+sudo dpkg -i atk-cfl_VERSION_linux_amd64.deb
+
+# Direct .rpm install
+curl -LO https://github.com/wohsj110/atlassian_cli/releases/latest/download/atk-cfl-VERSION.x86_64.rpm
+sudo rpm -i atk-cfl-VERSION.x86_64.rpm
+```
+
+---
+
+### From Source
+
+**Go install**
+
+```bash
+go install github.com/wohsj110/atlassian_cli/tools/atk-cfl/cmd/atk-cfl@latest
+```
+
+Requires Go 1.24 or later.
+
+## Quick Start
+
+### 1. Configure atk-cfl
+
+```bash
+atk-cfl init
+```
+
+This will prompt you for:
+- Your Confluence URL (e.g., `https://mycompany.atlassian.net`)
+- Your email address
+- An API token
+
+**To generate an API token:**
+1. Go to https://id.atlassian.com/manage-profile/security/api-tokens
+2. Click "Create API token"
+3. Copy the token (it won't be shown again)
+
+### 2. List Spaces
+
+```bash
+atk-cfl space list
+```
+
+### 3. List Pages in a Space
+
+```bash
+atk-cfl page list --space DEV
+```
+
+### 4. View a Page
+
+```bash
+atk-cfl page view 12345
+```
+
+### 5. Create a Page
+
+```bash
+atk-cfl page create --space DEV --title "My New Page"
+```
+
+---
+
+## Command Reference
+
+### Global Flags
+
+These flags are available on all commands:
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--config` | `-c` | `OS-native atlassian-agent-cli/config.yml` | Path to config file |
+| `--output` | `-o` | `table` | Output format: `table`, `plain` |
+| `--no-color` | | `false` | Disable colored output |
+| `--help` | `-h` | | Show help for command |
+| `--version` | `-v` | | Show version (root command only) |
+
+---
+
+### `atk-cfl init`
+
+Initialize atk-cfl with your Confluence Cloud credentials.
+
+```bash
+# Classic API token (Basic Auth — default)
+atk-cfl init
+atk-cfl init --url https://mycompany.atlassian.net --email you@example.com
+
+# Service account with scoped token (Bearer Auth)
+atk-cfl init --auth-method bearer
+atk-cfl init --auth-method bearer --url https://mycompany.atlassian.net \
+  --token YOUR_SCOPED_TOKEN --cloud-id YOUR_CLOUD_ID --no-verify
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--url` | | | Pre-populate Confluence URL |
+| `--email` | | | Pre-populate email address |
+| `--auth-method` | | | Auth method: `basic` (default) or `bearer` |
+| `--cloud-id` | | | Cloud ID for bearer auth (find at `https://your-site.atlassian.net/_edge/tenant_info`) |
+| `--no-verify` | | `false` | Skip connection verification |
+
+> **Bearer Auth:** For [Atlassian service accounts](https://support.atlassian.com/user-management/docs/manage-api-tokens-for-service-accounts/) with scoped API tokens. Email is not required. Requests route through the `api.atlassian.com` gateway.
+
+After a successful save, `atk-cfl init` prints the equivalent of `atk-cfl me` so you can confirm which user the saved credentials authenticate as. (Skipped when `--no-verify` is set, since no live API call is made and there is no user to render.)
+
+---
+
+### `atk-cfl me`
+
+Show the currently authenticated user as a token-dense one-liner: `accountId | displayName | email`. Missing fields render as `-` so the row is always exactly three pipe-delimited fields and stable to parse.
+
+```bash
+# Show current user
+atk-cfl me
+# → 60e09bae7fcd820073089249 | Rian Stockbower | rian@example.com
+
+# Show only the account ID (for scripting)
+atk-cfl me --id
+# → 60e09bae7fcd820073089249
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--id` | | `false` | Print only the account ID |
+
+---
+
+### `atk-cfl space list`
+
+List Confluence spaces.
+
+**Aliases:** `atk-cfl space ls`
+
+```bash
+atk-cfl space list
+atk-cfl space list --type global
+atk-cfl space list --type personal
+atk-cfl space list -l 50
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--limit` | `-l` | `25` | Maximum number of spaces to return |
+| `--type` | `-t` | | Filter by type: `global` or `personal` |
+
+---
+
+### `atk-cfl page list`
+
+List pages in a space.
+
+**Aliases:** `atk-cfl page ls`
+
+```bash
+atk-cfl page list --space DEV
+atk-cfl page list -s DEV -l 50
+atk-cfl page list -s DEV --status archived
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--space` | `-s` | (from config) | Space key (**required** if no default) |
+| `--limit` | `-l` | `25` | Maximum number of pages to return |
+| `--status` | | `current` | Filter by status: `current`, `archived`, `trashed` |
+
+---
+
+### `atk-cfl page view <page-id>`
+
+View a Confluence page. **Content is displayed as markdown by default.**
+
+```bash
+atk-cfl page view 12345
+atk-cfl page view 12345 --raw
+atk-cfl page view 12345 --version 7
+atk-cfl page view 12345 --web
+atk-cfl page view 12345 --content-only             # Output only content (no headers)
+atk-cfl page view 12345 --show-macros --content-only | atk-cfl page edit 12345 --legacy  # Roundtrip with macros
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--raw` | | `false` | Show raw Confluence format instead of markdown (XHTML storage format, or ADF JSON if storage is empty) |
+| `--web` | `-w` | `false` | Open page in browser instead of displaying |
+| `--version` | | `0` | View a specific page version |
+| `--no-truncate` | | `false` | Show full content without truncation |
+| `--show-macros` | | `false` | Show Confluence macro placeholders (e.g., `[TOC]`) instead of stripping them |
+| `--content-only` | | `false` | Output only page content (no Title/ID/Version headers); implies `--no-truncate` |
+
+**Arguments:**
+- `<page-id>` - The page ID (**required**)
+
+---
+
+### `atk-cfl page history list <page-id>`
+
+List Confluence page versions in newest-first order.
+
+**Aliases:** `atk-cfl page history ls`
+
+```bash
+atk-cfl page history list 12345
+atk-cfl page history list 12345 --limit 10
+atk-cfl page history list 12345 --id                 # Print version numbers only
+atk-cfl page history list 12345 --cursor "abc123"
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--limit` | `-l` | `25` | Maximum number of versions to return |
+| `--cursor` | | | Pagination cursor from the previous result |
+| `--id` | | `false` | Print only version numbers |
+
+**Arguments:**
+- `<page-id>` - The page ID (**required**)
+
+---
+
+### `atk-cfl page create`
+
+Create a new Confluence page.
+
+Content can be provided via:
+- `--file` flag to read from a file
+- Standard input (pipe content)
+- Interactive editor (default)
+
+**Markdown is the default format.** Content is automatically converted to Confluence storage format.
+
+```bash
+# Open markdown editor
+atk-cfl page create --space DEV --title "My Page"
+
+# Create from markdown file
+atk-cfl page create -s DEV -t "My Page" --file content.md
+
+# Create from markdown stdin
+echo "# Hello World" | atk-cfl page create -s DEV -t "My Page"
+
+# Create from XHTML file (auto-detected by extension)
+atk-cfl page create -s DEV -t "My Page" --file content.html
+
+# Create from XHTML stdin (disable markdown conversion)
+echo "<p>Hello</p>" | atk-cfl page create -s DEV -t "My Page" --no-markdown
+
+# Create from storage format XHTML (sent via storage representation API)
+echo "<p>Hello</p>" | atk-cfl page create -s DEV -t "My Page" --storage
+
+# Create as child of another page
+atk-cfl page create -s DEV -t "Child Page" --parent 12345
+
+# Create using legacy storage format (for compatibility with legacy editor pages)
+atk-cfl page create -s DEV -t "Legacy Page" --file content.md --legacy
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--space` | `-s` | (from config) | Space key (**required** if no default) |
+| `--title` | `-t` | | Page title (**required**) |
+| `--parent` | `-p` | | Parent page ID (for nested pages) |
+| `--file` | `-f` | | Read content from file |
+| `--editor` | | `false` | Force open in $EDITOR |
+| `--no-markdown` | | `false` | Disable markdown conversion (use raw XHTML) |
+| `--storage` | | `false` | Input is Confluence storage format (XHTML); sends via storage representation API |
+| `--legacy` | | `false` | Use legacy storage format instead of cloud editor (ADF) |
+
+**Format detection:**
+- `.md`, `.markdown` files → markdown (converted to XHTML)
+- `.html`, `.xhtml`, `.htm` files → XHTML (used as-is)
+- stdin, editor → markdown by default (use `--no-markdown` for XHTML)
+
+---
+
+### `atk-cfl page edit <page-id>`
+
+Edit an existing Confluence page.
+
+Content can be provided via:
+- `--file` flag to read from a file
+- Standard input (pipe content)
+- Interactive editor (default, opens with existing content)
+
+**Markdown is the default format.** Content is automatically converted to Confluence storage format.
+
+```bash
+# Open editor with existing page content
+atk-cfl page edit 12345
+
+# Update page content from markdown file
+atk-cfl page edit 12345 --file updated-content.md
+
+# Update page content from stdin
+echo "# Updated Content" | atk-cfl page edit 12345
+
+# Update only the page title
+atk-cfl page edit 12345 --title "New Title"
+
+# Move page to a new parent
+atk-cfl page edit 12345 --parent 67890
+
+# Move page and rename in one command
+atk-cfl page edit 12345 --parent 67890 --title "New Title"
+
+# Edit using legacy storage format (for pages created in legacy editor)
+atk-cfl page edit 12345 --file content.md --legacy
+
+# Pipe raw Confluence storage format (XHTML) directly
+echo "<p>Updated</p>" | atk-cfl page edit 12345 --storage
+
+# Extract, transform, and re-upload storage-format content
+atk-cfl page view 12345 --raw --content-only | \
+  sed 's/old/new/g' | atk-cfl page edit 12345 --storage
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--title` | `-t` | | New page title (keeps existing if not specified) |
+| `--parent` | `-p` | | Move page to new parent page ID |
+| `--file` | `-f` | | Read content from file |
+| `--editor` | | `false` | Force open in $EDITOR |
+| `--no-markdown` | | `false` | Disable markdown conversion (use raw XHTML) |
+| `--storage` | | `false` | Input is Confluence storage format (XHTML); sends via storage representation API |
+| `--legacy` | | `false` | Use legacy storage format instead of cloud editor (ADF) |
+
+**Arguments:**
+- `<page-id>` - The page ID (**required**)
+
+---
+
+### `atk-cfl page copy <page-id>`
+
+Create a copy of a Confluence page with a new title.
+
+```bash
+# Copy a page with a new title (same space)
+atk-cfl page copy 12345 --title "Copy of My Page"
+
+# Copy to a different space
+atk-cfl page copy 12345 --title "My Page" --space OTHERSPACE
+
+# Copy without attachments (faster for large pages)
+atk-cfl page copy 12345 --title "Lightweight Copy" --no-attachments
+
+# Copy without labels
+atk-cfl page copy 12345 --title "Fresh Copy" --no-labels
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--title` | `-t` | | Title for the copied page (**required**) |
+| `--space` | `-s` | (same as source) | Destination space key |
+| `--no-attachments` | | `false` | Don't copy attachments |
+| `--no-labels` | | `false` | Don't copy labels |
+
+**Arguments:**
+- `<page-id>` - The source page ID (**required**)
+
+---
+
+### `atk-cfl page delete <page-id>`
+
+Delete a Confluence page.
+
+```bash
+atk-cfl page delete 12345
+atk-cfl page delete 12345 --force
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--force` | `-f` | `false` | Skip confirmation prompt |
+
+**Arguments:**
+- `<page-id>` - The page ID (**required**)
+
+---
+
+### `atk-cfl search [query]`
+
+Search for pages, blog posts, attachments, and comments across Confluence.
+
+Uses Confluence Query Language (CQL) under the hood. Convenient flags handle common
+filters, or use `--cql` for advanced queries.
+
+```bash
+# Full-text search
+atk-cfl search "deployment guide"
+
+# Search within a space
+atk-cfl search "api docs" --space DEV
+
+# Find only pages
+atk-cfl search "meeting notes" --type page
+
+# Filter by label
+atk-cfl search --label documentation
+
+# Search by title
+atk-cfl search --title "Release Notes"
+
+# Combine filters
+atk-cfl search "kubernetes" --space DEV --type page --label infrastructure
+
+# Raw CQL for power users (find pages modified in last 7 days)
+atk-cfl search --cql "type=page AND space=DEV AND lastModified > now('-7d')"
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--cql` | | | Raw CQL query (advanced) |
+| `--space` | `-s` | (from config) | Filter by space key |
+| `--type` | `-t` | | Content type: `page`, `blogpost`, `attachment`, `comment` |
+| `--title` | | | Filter by title (contains) |
+| `--label` | | | Filter by label |
+| `--limit` | `-l` | `25` | Maximum number of results |
+
+**Arguments:**
+- `[query]` - Full-text search terms (optional if using filters)
+
+**CQL Reference:**
+Common CQL operators for `--cql`:
+- `=` exact match: `type=page`
+- `~` contains/fuzzy: `title ~ "meeting"`
+- `AND`, `OR`, `NOT` for combining
+- Date functions: `lastModified > now('-7d')`
+- [Full CQL documentation](https://developer.atlassian.com/cloud/confluence/advanced-searching-using-cql/)
+
+---
+
+### `atk-cfl config`
+
+Manage atk-cfl configuration.
+
+#### `atk-cfl config show`
+
+Display the resolved configuration, including the keyring ref, backend,
+and whether a token is configured (the token value itself is never
+displayed). Token/keyring reporting is authoritative; the non-secret rows
+reflect env + the legacy per-tool file only, so a value set solely in the
+shared store appears as "-" there even though atk-cfl uses it at runtime.
+
+```bash
+atk-cfl config show
+```
+
+#### `atk-cfl config test`
+
+Test connectivity with current configuration. Verifies URL reachability, credential validity, and API access.
+
+```bash
+atk-cfl config test
+```
+
+#### `atk-cfl config clear`
+
+Remove the single shared `api_token` from the OS keyring — you are warned
+that atk-jira loses access too, since both tools resolve the same key. `--all`
+removes the entire shared bundle (including any deprecated per-tool keys
+left by an older build) plus the non-secret config file and scrubs any
+surviving legacy plaintext files; `--all` still cleans the plaintext
+artifacts even when the keyring itself cannot be opened (the recovery
+path).
+
+```bash
+atk-cfl config clear
+atk-cfl config clear --force
+atk-cfl config clear --all
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--force` | `-f` | `false` | Skip confirmation prompt |
+
+> Note: Environment variables (`CFL_*`, `ATLASSIAN_*`) will still be used if set.
+
+---
+
+### `atk-cfl attachment list`
+
+List attachments on a page.
+
+**Aliases:** `atk-cfl attachment ls`, `atk-cfl att list`
+
+```bash
+atk-cfl attachment list --page 12345
+atk-cfl attachment list -p 12345 -l 50
+
+# List unused (orphaned) attachments not referenced in page content
+atk-cfl attachment list --page 12345 --unused
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--page` | `-p` | | Page ID (**required**) |
+| `--limit` | `-l` | `25` | Maximum number of attachments to return |
+| `--unused` | | `false` | Show only attachments not referenced in page content |
+
+---
+
+### `atk-cfl attachment upload`
+
+Upload a file as an attachment to a page.
+
+```bash
+atk-cfl attachment upload --page 12345 --file document.pdf
+atk-cfl attachment upload -p 12345 -f image.png -m "Screenshot"
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--page` | `-p` | | Page ID (**required**) |
+| `--file` | `-f` | | File to upload (**required**) |
+| `--comment` | `-m` | | Comment for the attachment |
+
+---
+
+### `atk-cfl attachment download <attachment-id>`
+
+Download an attachment.
+
+```bash
+atk-cfl attachment download abc123
+atk-cfl attachment download abc123 -O document.pdf
+atk-cfl attachment download abc123 -O existing.pdf --force
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--output-file` | `-O` | (original filename) | Output file path |
+| `--force` | `-f` | `false` | Overwrite existing file without warning |
+
+**Arguments:**
+- `<attachment-id>` - The attachment ID (**required**)
+
+---
+
+### `atk-cfl attachment delete <attachment-id>`
+
+Delete an attachment.
+
+```bash
+atk-cfl attachment delete att123
+atk-cfl attachment delete att123 --force
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--force` | `-f` | `false` | Skip confirmation prompt |
+
+**Arguments:**
+- `<attachment-id>` - The attachment ID (**required**)
+
+---
+
+## Confluence Macro Support
+
+atk-cfl supports roundtrip editing of common Confluence macros using bracket syntax. When viewing pages with `--show-macros`, macros are displayed as readable placeholders that can be edited and re-uploaded.
+
+### Supported Macros
+
+| Macro | Syntax | Description |
+|-------|--------|-------------|
+| TOC | `[TOC]` or `[TOC maxLevel=3]` | Table of contents |
+| Info | `[INFO]content[/INFO]` | Blue info panel |
+| Warning | `[WARNING]content[/WARNING]` | Yellow warning panel |
+| Note | `[NOTE]content[/NOTE]` | Yellow note panel |
+| Tip | `[TIP]content[/TIP]` | Green tip panel |
+| Expand | `[EXPAND title="..."]content[/EXPAND]` | Collapsible section |
+
+### Viewing Pages with Macros
+
+By default, macros are stripped from markdown output. Use `--show-macros` to preserve them:
+
+```bash
+# Without --show-macros: macros are hidden
+atk-cfl page view 12345
+# Output: just the page content, no macro markers
+
+# With --show-macros: macros appear as bracket syntax
+atk-cfl page view 12345 --show-macros
+# Output includes: [TOC maxLevel=3], [INFO]...[/INFO], etc.
+```
+
+### Creating Pages with Macros
+
+Use bracket syntax in your markdown. Macros work with both the default (ADF/cloud editor) and legacy (storage format) paths:
+
+```bash
+# Create a page with TOC (default ADF path)
+echo '[TOC]
+
+# Introduction
+Some content here.
+
+# Details
+More content.' | atk-cfl page create -s DEV -t "My Doc"
+
+# Create a page with info panel
+echo '[INFO]
+This is important information that readers should know.
+[/INFO]
+
+Regular content follows.' | atk-cfl page create -s DEV -t "My Guide"
+
+# Also works with --legacy flag for legacy editor pages
+echo '[TOC]
+
+# Heading' | atk-cfl page create -s DEV -t "My Doc" --legacy
+```
+
+### Roundtrip Editing
+
+View a page with macros, edit it, and push changes back:
+
+```bash
+# Export page with macros to file (use --content-only to exclude metadata headers)
+atk-cfl page view 12345 --show-macros --content-only > page.md
+
+# Edit the file (macros appear as [TOC], [INFO]...[/INFO], etc.)
+vim page.md
+
+# Push changes back via default ADF path
+cat page.md | atk-cfl page edit 12345
+
+# Or via legacy path (for legacy editor pages)
+cat page.md | atk-cfl page edit 12345 --legacy
+
+# Pipe directly for quick edits
+atk-cfl page view 12345 --show-macros --content-only | atk-cfl page edit 12345
+```
+
+### Panel Macro Parameters
+
+Panel macros support a `title` parameter:
+
+```markdown
+[WARNING title="Security Notice"]
+Do not share your API tokens.
+[/WARNING]
+```
+
+Values with spaces must be quoted. The content between open and close tags is converted as markdown.
+
+## Wiki Links
+
+atk-cfl supports wiki-link syntax for creating internal Confluence page links in markdown content. Wiki links work in both the default (ADF/cloud editor) and legacy (storage format) paths.
+
+### Syntax
+
+| Syntax | Description |
+|--------|-------------|
+| `[[Page Title]]` | Link to a page in the same space |
+| `[[SPACE:Page Title]]` | Link to a page in a different space |
+
+### Creating Pages with Wiki Links
+
+```bash
+# Create a page with internal links
+echo 'See [[Getting Started]] for setup instructions.
+
+For architecture details, check [[ENG:Architecture Decisions]].' | atk-cfl page create -s DEV -t "My Page"
+
+# Works with legacy mode too
+echo 'See [[Getting Started]] for details.' | atk-cfl page create -s DEV -t "My Page" --legacy
+```
+
+### Roundtrip Support
+
+When viewing pages with `--show-macros`, Confluence internal links (`<ac:link>`) are displayed as `[[...]]` syntax:
+
+```bash
+# View a page with wiki links preserved
+atk-cfl page view 12345 --show-macros --content-only
+# Output: See [[Getting Started]] for setup instructions.
+
+# Edit and push back
+atk-cfl page view 12345 --show-macros --content-only | atk-cfl page edit 12345 --legacy
+```
+
+### Space Key Format
+
+The text before `:` is treated as a space key if it contains only uppercase letters, digits, hyphens, underscores, or tildes (e.g., `DEV`, `TEAM1`, `~USERSPACE`). Lowercase text before `:` is treated as part of the page title, not a space key.
+
+---
+
+## Configuration
+
+`atk-cfl init` stores the **API token in your OS keyring** (macOS Keychain /
+Linux Secret Service / Windows Credential Manager, or an opt-in
+encrypted-file backend) and writes only **non-secret** config to the
+shared store at `OS-native atlassian-agent-cli/config.yml`:
+
+```yaml
+default:
+  url: https://mycompany.atlassian.net   # base URL; atk-cfl appends /wiki on read
+  email: you@example.com
+  auth_method: basic                     # or "bearer"
+  cloud_id: ""                           # required for bearer
+atk_cfl:
+  default_space: DEV                     # atk-cfl-only defaults; internal section key
+  output_format: table
+```
+
+There is **no `api_token:` field** — the secret never touches a
+plaintext file. The same config file and keyring bundle are shared with
+`atk-jira` — one Atlassian token, both tools. Run `atk-cfl init` after `atk-jira init`
+(or vice versa) and you'll be offered to reuse the credentials.
+
+**Non-interactive token ingress (§1.5.2):** use `atk-cfl set-credential` for
+installer scripts, CI, and credential-manager driven setup. Required
+flags:
+
+- `--ref atlassian-agent-cli/default` (required on fresh installs; defaults to
+  the canonical ref when a shared config already exists)
+- `--key api_token` (always required)
+- exactly one of `--stdin` or `--from-env VAR` (mutually exclusive; no
+  `--value` — flag-passed secrets leak into process listings)
+- `--overwrite` to replace an existing entry (default: fail loud)
+- `--json` to emit the §1.5.2 control-plane envelope
+  `{"ref","key","backend","written","error?"}` on stdout (stderr stays
+  empty under `--json`)
+
+```bash
+# From a secrets manager
+op read 'op://Vault/Atlassian/token' | atk-cfl set-credential \
+  --ref atlassian-agent-cli/default --key api_token --stdin
+
+# From an environment variable
+atk-cfl set-credential --ref atlassian-agent-cli/default --key api_token \
+  --from-env CFL_API_TOKEN
+
+# Replace an existing entry
+op read 'op://Vault/Atlassian/token' | atk-cfl set-credential \
+  --ref atlassian-agent-cli/default --key api_token --stdin --overwrite
+
+# Installer-script control-plane envelope
+atk-cfl set-credential --ref atlassian-agent-cli/default --key api_token \
+  --from-env CFL_API_TOKEN --json
+```
+
+Legacy `OS-native atlassian-agent-cli/config.yml` keeps working indefinitely. The first
+command auto-migrates any pre-existing plaintext token into the keyring
+and scrubs the plaintext in place. If your legacy URL ends in `/wiki`,
+migration strips it: the shared store always holds the base URL and atk-cfl
+appends `/wiki` on read.
+
+### Environment Variables
+
+Environment variables override file-based config. Variables are checked in order of precedence (first match wins):
+
+| Setting | Precedence (highest to lowest) |
+|---------|-------------------------------|
+| URL | `CFL_URL` → `ATLASSIAN_URL` → shared `default` → legacy file |
+| Email | `CFL_EMAIL` → `ATLASSIAN_EMAIL` → shared `default` → legacy |
+| API Token | `CFL_API_TOKEN` → `ATLASSIAN_API_TOKEN` → keyring `api_token` (single shared key; OS keyring, never a plaintext file) |
+| Default Space | `CFL_DEFAULT_SPACE` → shared internal `atk-cfl.default_space` → legacy |
+| Auth Method | `CFL_AUTH_METHOD` → `ATLASSIAN_AUTH_METHOD` → shared `default` → legacy → `basic` |
+| Cloud ID | `CFL_CLOUD_ID` → `ATLASSIAN_CLOUD_ID` → shared `default` → legacy |
+
+Per §2.2 connection config is single-sourced from the shared `default` section — internal per-tool `atk_cfl:`/`atk_jira:` sections carry only non-secret defaults and may not override `url`/`email`/`auth_method`/`cloud_id`.
+
+**Shared credentials:** If you use both `atk-cfl` and `atk-jira` (Jira CLI), set `ATLASSIAN_*` variables once:
+
+```bash
+export ATLASSIAN_URL=https://mycompany.atlassian.net
+export ATLASSIAN_EMAIL=user@example.com
+export ATLASSIAN_API_TOKEN=your-api-token
+```
+
+**Per-tool override:** Use `CFL_*` to override for Confluence specifically:
+
+```bash
+export ATLASSIAN_EMAIL=user@example.com
+export ATLASSIAN_API_TOKEN=your-api-token
+export CFL_URL=https://confluence.internal.corp.com  # Different URL for Confluence
+```
+
+---
+
+## Output Formats
+
+Use `--output` or `-o` to change output format:
+
+```bash
+atk-cfl space list -o table  # Default: human-readable table
+atk-cfl space list -o plain  # Tab-separated for piping to other tools
+```
+
+**Breaking change (#392):** resource `-o json` has been removed. JSON is
+reserved for control-plane envelopes per cli-common
+`docs/output-and-rendering.md` §2. The surviving JSON surface is
+[`atk-cfl set-credential --json`](#atk-cfl-set-credential), which emits a §1.5.2
+write-confirmation envelope for scripted credential rotation.
+
+---
+
+## Shell Completion
+
+atk-cfl supports tab completion for bash, zsh, fish, and PowerShell.
+
+### Bash
+
+```bash
+# Load in current session
+source <(atk-cfl completion bash)
+
+# Install permanently (Linux)
+atk-cfl completion bash | sudo tee /etc/bash_completion.d/atk-cfl > /dev/null
+
+# Install permanently (macOS with Homebrew)
+atk-cfl completion bash > $(brew --prefix)/etc/bash_completion.d/atk-cfl
+```
+
+### Zsh
+
+```bash
+# Load in current session
+source <(atk-cfl completion zsh)
+
+# Install permanently
+mkdir -p ~/.zsh/completions
+atk-cfl completion zsh > ~/.zsh/completions/_atk-cfl
+
+# Add to ~/.zshrc if not already present:
+# fpath=(~/.zsh/completions $fpath)
+# autoload -Uz compinit && compinit
+```
+
+### Fish
+
+```bash
+# Load in current session
+atk-cfl completion fish | source
+
+# Install permanently
+atk-cfl completion fish > ~/.config/fish/completions/atk-cfl.fish
+```
+
+### PowerShell
+
+```powershell
+# Load in current session
+atk-cfl completion powershell | Out-String | Invoke-Expression
+
+# Install permanently (add to $PROFILE)
+atk-cfl completion powershell >> $PROFILE
+```
+
+---
+
+## Development
+
+### Prerequisites
+
+- Go 1.24 or later
+- golangci-lint (for linting)
+
+### Build
+
+```bash
+make build
+```
+
+### Test
+
+```bash
+make test
+```
+
+### Lint
+
+```bash
+make lint
+```
+
+---
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.

@@ -1,0 +1,78 @@
+package attachment
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/spf13/cobra"
+
+	"github.com/wohsj110/atlassian_cli/tools/atk-cfl/internal/cmd/root"
+	atkpresent "github.com/wohsj110/atlassian_cli/tools/atk-cfl/internal/present"
+)
+
+type uploadOptions struct {
+	*root.Options
+	pageID  string
+	file    string
+	comment string
+}
+
+func newUploadCmd(rootOpts *root.Options) *cobra.Command {
+	opts := &uploadOptions{Options: rootOpts}
+
+	cmd := &cobra.Command{
+		Use:   "upload",
+		Short: "Upload an attachment to a page",
+		Long:  `Upload a file as an attachment to a Confluence page.`,
+		Example: `  # Upload a file
+  atk-cfl attachment upload --page 12345 --file document.pdf
+
+  # Upload with a comment (-m for message/comment)
+  atk-cfl attachment upload --page 12345 --file image.png -m "Screenshot"`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runUpload(cmd.Context(), opts)
+		},
+	}
+
+	cmd.Flags().StringVarP(&opts.pageID, "page", "p", "", "Page ID (required)")
+	cmd.Flags().StringVarP(&opts.file, "file", "f", "", "File to upload (required)")
+	cmd.Flags().StringVarP(&opts.comment, "comment", "m", "", "Comment for the attachment")
+
+	_ = cmd.MarkFlagRequired("page")
+	_ = cmd.MarkFlagRequired("file")
+
+	return cmd
+}
+
+func runUpload(ctx context.Context, opts *uploadOptions) error {
+	client, err := opts.APIClient()
+	if err != nil {
+		return err
+	}
+
+	file, err := os.Open(opts.file)
+	if err != nil {
+		return fmt.Errorf("opening file: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	localSize := int64(-1)
+	if info, err := file.Stat(); err == nil {
+		localSize = info.Size()
+	}
+
+	filename := filepath.Base(opts.file)
+
+	attachment, err := client.UploadAttachment(ctx, opts.pageID, filename, file, opts.comment)
+	if err != nil {
+		return fmt.Errorf("uploading attachment: %w", err)
+	}
+
+	reportedSize := attachment.FileSize
+	if localSize >= 0 {
+		reportedSize = localSize
+	}
+
+	return atkpresent.Emit(opts.Options, atkpresent.AttachmentPresenter{}.PresentUpload(filename, attachment, reportedSize))
+}

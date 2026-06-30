@@ -1,0 +1,1000 @@
+package page
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/wohsj110/atlassian_cli/shared/testutil"
+
+	"github.com/wohsj110/atlassian_cli/tools/atk-cfl/api"
+	"github.com/wohsj110/atlassian_cli/tools/atk-cfl/internal/cmd/root"
+)
+
+// mockCreateServer creates a test server that handles GetSpaceByKey and CreatePage requests
+func mockCreateServer(t *testing.T, spaceKey, spaceID string, createStatus int) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && strings.Contains(r.URL.Path, "/spaces") && r.URL.Query().Get("keys") != "":
+			// GetSpaceByKey
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"results": [{"id": "` + spaceID + `", "key": "` + spaceKey + `", "name": "Test Space", "type": "global"}]}`))
+		case r.Method == "POST" && strings.Contains(r.URL.Path, "/pages"):
+			// CreatePage
+			w.WriteHeader(createStatus)
+			if createStatus == http.StatusOK {
+				_, _ = w.Write([]byte(`{
+					"id": "99999",
+					"title": "Test Page",
+					"spaceId": "` + spaceID + `",
+					"version": {"number": 1},
+					"_links": {"webui": "/spaces/` + spaceKey + `/pages/99999"}
+				}`))
+			} else {
+				_, _ = w.Write([]byte(`{"message": "Create failed"}`))
+			}
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
+
+func newCreateTestRootOptions() *root.Options {
+	return &root.Options{
+		Output:  "table",
+		NoColor: true,
+		Stdin:   strings.NewReader(""),
+		Stdout:  &bytes.Buffer{},
+		Stderr:  &bytes.Buffer{},
+	}
+}
+
+func TestRunCreate_Success(t *testing.T) {
+	t.Parallel()
+	// Create temp markdown file
+	tmpDir := t.TempDir()
+	mdFile := filepath.Join(tmpDir, "content.md")
+	err := os.WriteFile(mdFile, []byte("# Hello\n\nWorld"), 0600)
+	testutil.RequireNoError(t, err)
+
+	server := mockCreateServer(t, "DEV", "123456", http.StatusOK)
+	defer server.Close()
+
+	rootOpts := newCreateTestRootOptions()
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &createOptions{
+		Options: rootOpts,
+		space:   "DEV",
+		title:   "Test Page",
+		file:    mdFile,
+	}
+
+	err = runCreate(context.Background(), opts)
+	testutil.RequireNoError(t, err)
+	testutil.Equal(t, "Created page: Test Page\nID: 99999\nURL: /spaces/DEV/pages/99999\n", rootOpts.Stdout.(*bytes.Buffer).String())
+	testutil.Equal(t, "", rootOpts.Stderr.(*bytes.Buffer).String())
+}
+
+func TestRunCreate_HTMLFile_Legacy(t *testing.T) {
+	t.Parallel()
+	// Create temp HTML file - should be treated as storage format in legacy mode
+	tmpDir := t.TempDir()
+	htmlFile := filepath.Join(tmpDir, "content.html")
+	err := os.WriteFile(htmlFile, []byte("<p>Hello World</p>"), 0600)
+	testutil.RequireNoError(t, err)
+
+	var receivedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && strings.Contains(r.URL.Path, "/spaces"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"results": [{"id": "123456", "key": "DEV"}]}`))
+		case r.Method == "POST" && strings.Contains(r.URL.Path, "/pages"):
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &receivedBody)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id": "99999", "title": "Test", "version": {"number": 1}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	rootOpts := newCreateTestRootOptions()
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &createOptions{
+		Options: rootOpts,
+		space:   "DEV",
+		title:   "Test Page",
+		file:    htmlFile,
+		legacy:  true, // Use legacy mode for HTML files
+	}
+
+	err = runCreate(context.Background(), opts)
+	testutil.RequireNoError(t, err)
+
+	// Verify HTML was not converted (should be passed as-is in storage format)
+	bodyMap := receivedBody["body"].(map[string]any)
+	storageMap := bodyMap["storage"].(map[string]any)
+	content := storageMap["value"].(string)
+	testutil.Equal(t, "<p>Hello World</p>", content)
+}
+
+func TestRunCreate_NoMarkdownFlag_Legacy(t *testing.T) {
+	t.Parallel()
+	// Create temp file with markdown extension
+	tmpDir := t.TempDir()
+	mdFile := filepath.Join(tmpDir, "content.md")
+	err := os.WriteFile(mdFile, []byte("<p>Raw XHTML</p>"), 0600)
+	testutil.RequireNoError(t, err)
+
+	var receivedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && strings.Contains(r.URL.Path, "/spaces"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"results": [{"id": "123456", "key": "DEV"}]}`))
+		case r.Method == "POST" && strings.Contains(r.URL.Path, "/pages"):
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &receivedBody)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id": "99999", "title": "Test", "version": {"number": 1}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	rootOpts := newCreateTestRootOptions()
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	useMd := false
+	opts := &createOptions{
+		Options:  rootOpts,
+		space:    "DEV",
+		title:    "Test Page",
+		file:     mdFile,
+		markdown: &useMd, // Force no markdown conversion
+		legacy:   true,   // Use legacy mode for storage format
+	}
+
+	err = runCreate(context.Background(), opts)
+	testutil.RequireNoError(t, err)
+
+	// Verify content was not converted even though file has .md extension
+	bodyMap := receivedBody["body"].(map[string]any)
+	storageMap := bodyMap["storage"].(map[string]any)
+	content := storageMap["value"].(string)
+	testutil.Equal(t, "<p>Raw XHTML</p>", content)
+}
+
+func TestRunCreate_MissingSpace(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	mdFile := filepath.Join(tmpDir, "content.md")
+	err := os.WriteFile(mdFile, []byte("# Hello"), 0600)
+	testutil.RequireNoError(t, err)
+
+	// Don't need server - should fail before API call
+	rootOpts := newCreateTestRootOptions()
+	client := api.NewClient("http://unused", "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &createOptions{
+		Options: rootOpts,
+		space:   "", // No space provided
+		title:   "Test Page",
+		file:    mdFile,
+	}
+
+	err = runCreate(context.Background(), opts)
+	testutil.RequireError(t, err)
+	testutil.Contains(t, err.Error(), "space is required")
+}
+
+func TestRunCreate_SpaceNotFound(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	mdFile := filepath.Join(tmpDir, "content.md")
+	err := os.WriteFile(mdFile, []byte("# Hello"), 0600)
+	testutil.RequireNoError(t, err)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Return empty results for space lookup
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results": []}`))
+	}))
+	defer server.Close()
+
+	rootOpts := newCreateTestRootOptions()
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &createOptions{
+		Options: rootOpts,
+		space:   "INVALID",
+		title:   "Test Page",
+		file:    mdFile,
+	}
+
+	err = runCreate(context.Background(), opts)
+	testutil.RequireError(t, err)
+	testutil.Contains(t, err.Error(), "finding space")
+}
+
+func TestRunCreate_CreateFailed(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	mdFile := filepath.Join(tmpDir, "content.md")
+	err := os.WriteFile(mdFile, []byte("# Hello"), 0600)
+	testutil.RequireNoError(t, err)
+
+	server := mockCreateServer(t, "DEV", "123456", http.StatusForbidden)
+	defer server.Close()
+
+	rootOpts := newCreateTestRootOptions()
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &createOptions{
+		Options: rootOpts,
+		space:   "DEV",
+		title:   "Test Page",
+		file:    mdFile,
+	}
+
+	err = runCreate(context.Background(), opts)
+	testutil.RequireError(t, err)
+	testutil.Contains(t, err.Error(), "creating page")
+	testutil.NotContains(t, err.Error(), "creating page: creating page:")
+}
+
+func TestRunCreate_NoContentSource_NoTTY_FailsBeforeAPICall(t *testing.T) {
+	t.Parallel()
+	oldStdinIsTTY := stdinIsTTY
+	stdinIsTTY = func() bool { return false }
+	t.Cleanup(func() { stdinIsTTY = oldStdinIsTTY })
+
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	rootOpts := newCreateTestRootOptions()
+	rootOpts.Stdin = nil
+	rootOpts.SetAPIClient(api.NewClient(server.URL, "test@example.com", "token"))
+
+	opts := &createOptions{
+		Options: rootOpts,
+		space:   "DEV",
+		title:   "Test Page",
+	}
+
+	err := runCreate(context.Background(), opts)
+	testutil.RequireError(t, err)
+	testutil.Contains(t, err.Error(), "page content source is required")
+	testutil.NotContains(t, err.Error(), "editor failed")
+	testutil.Equal(t, 0, hits)
+}
+
+func TestRunCreate_WithParent(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	mdFile := filepath.Join(tmpDir, "content.md")
+	err := os.WriteFile(mdFile, []byte("# Child Page"), 0600)
+	testutil.RequireNoError(t, err)
+
+	var receivedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && strings.Contains(r.URL.Path, "/spaces"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"results": [{"id": "123456", "key": "DEV"}]}`))
+		case r.Method == "POST" && strings.Contains(r.URL.Path, "/pages"):
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &receivedBody)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id": "99999", "title": "Test", "version": {"number": 1}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	rootOpts := newCreateTestRootOptions()
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &createOptions{
+		Options: rootOpts,
+		space:   "DEV",
+		title:   "Child Page",
+		parent:  "12345",
+		file:    mdFile,
+	}
+
+	err = runCreate(context.Background(), opts)
+	testutil.RequireNoError(t, err)
+
+	// Verify parent ID was included in request
+	testutil.Equal(t, "12345", receivedBody["parentId"])
+}
+
+func TestRunCreate_MarkdownConversion_Legacy(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	mdFile := filepath.Join(tmpDir, "content.md")
+	err := os.WriteFile(mdFile, []byte("# Hello World\n\nThis is **bold** text."), 0600)
+	testutil.RequireNoError(t, err)
+
+	var receivedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && strings.Contains(r.URL.Path, "/spaces"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"results": [{"id": "123456", "key": "DEV"}]}`))
+		case r.Method == "POST" && strings.Contains(r.URL.Path, "/pages"):
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &receivedBody)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id": "99999", "title": "Test", "version": {"number": 1}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	rootOpts := newCreateTestRootOptions()
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &createOptions{
+		Options: rootOpts,
+		space:   "DEV",
+		title:   "Test Page",
+		file:    mdFile,
+		legacy:  true, // Use legacy mode to test storage format
+	}
+
+	err = runCreate(context.Background(), opts)
+	testutil.RequireNoError(t, err)
+
+	// Verify markdown was converted to HTML storage format
+	bodyMap := receivedBody["body"].(map[string]any)
+	storageMap := bodyMap["storage"].(map[string]any)
+	content := storageMap["value"].(string)
+
+	// Should have HTML heading and strong tag from markdown conversion
+	testutil.Contains(t, content, "<h1")
+	testutil.Contains(t, content, "<strong>bold</strong>")
+}
+
+func TestRunCreate_MarkdownToADF(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	mdFile := filepath.Join(tmpDir, "content.md")
+	err := os.WriteFile(mdFile, []byte("# Hello World\n\nThis is **bold** text."), 0600)
+	testutil.RequireNoError(t, err)
+
+	var receivedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && strings.Contains(r.URL.Path, "/spaces"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"results": [{"id": "123456", "key": "DEV"}]}`))
+		case r.Method == "POST" && strings.Contains(r.URL.Path, "/pages"):
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &receivedBody)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id": "99999", "title": "Test", "version": {"number": 1}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	rootOpts := newCreateTestRootOptions()
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &createOptions{
+		Options: rootOpts,
+		space:   "DEV",
+		title:   "Test Page",
+		file:    mdFile,
+		// Default: not legacy, uses ADF
+	}
+
+	err = runCreate(context.Background(), opts)
+	testutil.RequireNoError(t, err)
+
+	// Verify ADF format was used (default)
+	bodyMap := receivedBody["body"].(map[string]any)
+	adfMap := bodyMap["atlas_doc_format"].(map[string]any)
+	content := adfMap["value"].(string)
+
+	// Should be valid ADF JSON with heading and strong mark
+	testutil.Contains(t, content, `"type":"doc"`)
+	testutil.Contains(t, content, `"type":"heading"`)
+	testutil.Contains(t, content, `"type":"strong"`)
+}
+
+func TestRunCreate_FileReadError(t *testing.T) {
+	t.Parallel()
+	server := mockCreateServer(t, "DEV", "123456", http.StatusOK)
+	defer server.Close()
+
+	rootOpts := newCreateTestRootOptions()
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &createOptions{
+		Options: rootOpts,
+		space:   "DEV",
+		title:   "Test Page",
+		file:    "/nonexistent/file.md",
+	}
+
+	err := runCreate(context.Background(), opts)
+	testutil.RequireError(t, err)
+	testutil.Contains(t, err.Error(), "reading file")
+}
+
+func TestRunCreate_Stdin_ADF(t *testing.T) {
+	t.Parallel()
+	var receivedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && strings.Contains(r.URL.Path, "/spaces"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"results": [{"id": "123456", "key": "DEV"}]}`))
+		case r.Method == "POST" && strings.Contains(r.URL.Path, "/pages"):
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &receivedBody)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id": "99999", "title": "Test", "version": {"number": 1}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	rootOpts := newCreateTestRootOptions()
+	rootOpts.Stdin = strings.NewReader("# Hello\n\nThis is **bold** text.")
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &createOptions{
+		Options: rootOpts,
+		space:   "DEV",
+		title:   "Test Page",
+	}
+
+	err := runCreate(context.Background(), opts)
+	testutil.RequireNoError(t, err)
+
+	// Verify ADF format was used
+	bodyMap := receivedBody["body"].(map[string]any)
+	adfMap := bodyMap["atlas_doc_format"].(map[string]any)
+	content := adfMap["value"].(string)
+
+	testutil.Contains(t, content, `"type":"doc"`)
+	testutil.Contains(t, content, `"type":"heading"`)
+	testutil.Contains(t, content, `"type":"strong"`)
+}
+
+func TestRunCreate_Stdin_Legacy(t *testing.T) {
+	t.Parallel()
+	var receivedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && strings.Contains(r.URL.Path, "/spaces"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"results": [{"id": "123456", "key": "DEV"}]}`))
+		case r.Method == "POST" && strings.Contains(r.URL.Path, "/pages"):
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &receivedBody)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id": "99999", "title": "Test", "version": {"number": 1}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	rootOpts := newCreateTestRootOptions()
+	rootOpts.Stdin = strings.NewReader("# Hello\n\nThis is **bold** text.")
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &createOptions{
+		Options: rootOpts,
+		space:   "DEV",
+		title:   "Test Page",
+		legacy:  true,
+	}
+
+	err := runCreate(context.Background(), opts)
+	testutil.RequireNoError(t, err)
+
+	// Verify storage format was used
+	bodyMap := receivedBody["body"].(map[string]any)
+	storageMap := bodyMap["storage"].(map[string]any)
+	content := storageMap["value"].(string)
+
+	testutil.Contains(t, content, "<h1")
+	testutil.Contains(t, content, "<strong>bold</strong>")
+}
+
+func TestRunCreate_Stdin_NoMarkdown_Legacy(t *testing.T) {
+	t.Parallel()
+	var receivedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && strings.Contains(r.URL.Path, "/spaces"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"results": [{"id": "123456", "key": "DEV"}]}`))
+		case r.Method == "POST" && strings.Contains(r.URL.Path, "/pages"):
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &receivedBody)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id": "99999", "title": "Test", "version": {"number": 1}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	rootOpts := newCreateTestRootOptions()
+	rootOpts.Stdin = strings.NewReader("<p>Raw XHTML content</p>")
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	useMd := false
+	opts := &createOptions{
+		Options:  rootOpts,
+		space:    "DEV",
+		title:    "Test Page",
+		markdown: &useMd,
+		legacy:   true,
+	}
+
+	err := runCreate(context.Background(), opts)
+	testutil.RequireNoError(t, err)
+
+	// Verify raw content passed through without conversion
+	bodyMap := receivedBody["body"].(map[string]any)
+	storageMap := bodyMap["storage"].(map[string]any)
+	content := storageMap["value"].(string)
+
+	testutil.Equal(t, "<p>Raw XHTML content</p>", content)
+}
+
+func TestRunCreate_StorageFlag_Stdin(t *testing.T) {
+	t.Parallel()
+	var receivedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && strings.Contains(r.URL.Path, "/spaces"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"results": [{"id": "123456", "key": "DEV"}]}`))
+		case r.Method == "POST" && strings.Contains(r.URL.Path, "/pages"):
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &receivedBody)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id": "99999", "title": "Test", "version": {"number": 1}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	rootOpts := newCreateTestRootOptions()
+	rootOpts.Stdin = strings.NewReader(`<ac:structured-macro ac:name="toc"/><p>Storage format content</p>`)
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	useMd := false
+	opts := &createOptions{
+		Options:  rootOpts,
+		space:    "DEV",
+		title:    "Test Page",
+		storage:  true,
+		markdown: &useMd,
+	}
+
+	err := runCreate(context.Background(), opts)
+	testutil.RequireNoError(t, err)
+
+	// Verify storage format was used (not atlas_doc_format)
+	bodyMap := receivedBody["body"].(map[string]any)
+	storageMap := bodyMap["storage"].(map[string]any)
+	content := storageMap["value"].(string)
+
+	// Content should be passed through as-is
+	testutil.Contains(t, content, `ac:structured-macro`)
+	testutil.Nil(t, bodyMap["atlas_doc_format"])
+}
+
+func TestRunCreate_StorageFlag_File(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	htmlFile := filepath.Join(tmpDir, "content.html")
+	err := os.WriteFile(htmlFile, []byte("<p>Direct storage XHTML</p>"), 0600)
+	testutil.RequireNoError(t, err)
+
+	var receivedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && strings.Contains(r.URL.Path, "/spaces"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"results": [{"id": "123456", "key": "DEV"}]}`))
+		case r.Method == "POST" && strings.Contains(r.URL.Path, "/pages"):
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &receivedBody)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id": "99999", "title": "Test", "version": {"number": 1}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	rootOpts := newCreateTestRootOptions()
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	useMd := false
+	opts := &createOptions{
+		Options:  rootOpts,
+		space:    "DEV",
+		title:    "Test Page",
+		file:     htmlFile,
+		storage:  true,
+		markdown: &useMd,
+	}
+
+	err = runCreate(context.Background(), opts)
+	testutil.RequireNoError(t, err)
+
+	// Verify storage format was used without --legacy
+	bodyMap := receivedBody["body"].(map[string]any)
+	storageMap := bodyMap["storage"].(map[string]any)
+	content := storageMap["value"].(string)
+	testutil.Equal(t, "<p>Direct storage XHTML</p>", content)
+	testutil.Nil(t, bodyMap["atlas_doc_format"])
+}
+
+func TestRunCreate_ComplexMarkdown_ADF(t *testing.T) {
+	t.Parallel()
+	var receivedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && strings.Contains(r.URL.Path, "/spaces"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"results": [{"id": "123456", "key": "DEV"}]}`))
+		case r.Method == "POST" && strings.Contains(r.URL.Path, "/pages"):
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &receivedBody)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id": "99999", "title": "Test", "version": {"number": 1}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	complexMarkdown := `# Title
+
+| Header 1 | Header 2 |
+|----------|----------|
+| Cell 1   | Cell 2   |
+
+- Item 1
+  - Nested item
+- Item 2
+
+` + "```go\nfunc main() {\n    fmt.Println(\"Hello\")\n}\n```"
+
+	rootOpts := newCreateTestRootOptions()
+	rootOpts.Stdin = strings.NewReader(complexMarkdown)
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &createOptions{
+		Options: rootOpts,
+		space:   "DEV",
+		title:   "Test Page",
+	}
+
+	err := runCreate(context.Background(), opts)
+	testutil.RequireNoError(t, err)
+
+	// Verify ADF contains complex elements
+	bodyMap := receivedBody["body"].(map[string]any)
+	adfMap := bodyMap["atlas_doc_format"].(map[string]any)
+	content := adfMap["value"].(string)
+
+	testutil.Contains(t, content, `"type":"table"`)
+	testutil.Contains(t, content, `"type":"bulletList"`)
+	testutil.Contains(t, content, `"type":"codeBlock"`)
+	testutil.Contains(t, content, `"language":"go"`)
+}
+
+func TestRunCreate_EmptyContentFromStdin(t *testing.T) {
+	t.Parallel()
+	server := mockCreateServer(t, "DEV", "123456", http.StatusOK)
+	defer server.Close()
+
+	rootOpts := newCreateTestRootOptions()
+	rootOpts.Stdin = strings.NewReader("")
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &createOptions{
+		Options: rootOpts,
+		space:   "DEV",
+		title:   "Test Page",
+	}
+
+	err := runCreate(context.Background(), opts)
+	testutil.RequireError(t, err)
+	testutil.Contains(t, err.Error(), "page content cannot be empty")
+}
+
+func TestRunCreate_WhitespaceOnlyFromStdin(t *testing.T) {
+	t.Parallel()
+	server := mockCreateServer(t, "DEV", "123456", http.StatusOK)
+	defer server.Close()
+
+	rootOpts := newCreateTestRootOptions()
+	rootOpts.Stdin = strings.NewReader("   \n\t\n   ")
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &createOptions{
+		Options: rootOpts,
+		space:   "DEV",
+		title:   "Test Page",
+	}
+
+	err := runCreate(context.Background(), opts)
+	testutil.RequireError(t, err)
+	testutil.Contains(t, err.Error(), "page content cannot be empty")
+}
+
+func TestRunCreate_EmptyFile(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	emptyFile := filepath.Join(tmpDir, "empty.md")
+	err := os.WriteFile(emptyFile, []byte(""), 0600)
+	testutil.RequireNoError(t, err)
+
+	server := mockCreateServer(t, "DEV", "123456", http.StatusOK)
+	defer server.Close()
+
+	rootOpts := newCreateTestRootOptions()
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &createOptions{
+		Options: rootOpts,
+		space:   "DEV",
+		title:   "Test Page",
+		file:    emptyFile,
+	}
+
+	err = runCreate(context.Background(), opts)
+	testutil.RequireError(t, err)
+	testutil.Contains(t, err.Error(), "page content cannot be empty")
+}
+
+func TestRunCreate_WhitespaceOnlyFile(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	whitespaceFile := filepath.Join(tmpDir, "whitespace.md")
+	err := os.WriteFile(whitespaceFile, []byte("   \n\t\n   "), 0600)
+	testutil.RequireNoError(t, err)
+
+	server := mockCreateServer(t, "DEV", "123456", http.StatusOK)
+	defer server.Close()
+
+	rootOpts := newCreateTestRootOptions()
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &createOptions{
+		Options: rootOpts,
+		space:   "DEV",
+		title:   "Test Page",
+		file:    whitespaceFile,
+	}
+
+	err = runCreate(context.Background(), opts)
+	testutil.RequireError(t, err)
+	testutil.Contains(t, err.Error(), "page content cannot be empty")
+}
+
+// mockCreateBodyServer returns a server capturing the create request body.
+func mockCreateBodyServer(t *testing.T, received *map[string]any) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && strings.Contains(r.URL.Path, "/spaces"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"results": [{"id": "123456", "key": "DEV"}]}`))
+		case r.Method == "POST" && strings.Contains(r.URL.Path, "/pages"):
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, received)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id": "99999", "title": "Test", "version": {"number": 1}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
+
+// "--file -" reads the body from stdin; the early os.Stat guard must not
+// treat "-" as a path (it would ENOENT).
+func TestRunCreate_FileDash_Stdin_ADF(t *testing.T) {
+	t.Parallel()
+	var receivedBody map[string]any
+	server := mockCreateBodyServer(t, &receivedBody)
+	defer server.Close()
+
+	rootOpts := newCreateTestRootOptions()
+	rootOpts.Stdin = strings.NewReader("# Hello\n\nThis is **bold** text.")
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &createOptions{
+		Options: rootOpts,
+		space:   "DEV",
+		title:   "Test Page",
+		file:    "-",
+	}
+
+	err := runCreate(context.Background(), opts)
+	testutil.RequireNoError(t, err)
+
+	bodyMap := receivedBody["body"].(map[string]any)
+	adfMap := bodyMap["atlas_doc_format"].(map[string]any)
+	content := adfMap["value"].(string)
+	testutil.Contains(t, content, `"type":"doc"`)
+	testutil.Contains(t, content, `"type":"heading"`)
+	testutil.Contains(t, content, `"type":"strong"`)
+}
+
+// "--file - --storage" pipes raw storage XHTML through unchanged.
+func TestRunCreate_FileDash_Stdin_Storage(t *testing.T) {
+	t.Parallel()
+	var receivedBody map[string]any
+	server := mockCreateBodyServer(t, &receivedBody)
+	defer server.Close()
+
+	rootOpts := newCreateTestRootOptions()
+	rootOpts.Stdin = strings.NewReader(`<p>Storage content</p>`)
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	useMd := false
+	opts := &createOptions{
+		Options:  rootOpts,
+		space:    "DEV",
+		title:    "Test Page",
+		file:     "-",
+		storage:  true,
+		markdown: &useMd,
+	}
+
+	err := runCreate(context.Background(), opts)
+	testutil.RequireNoError(t, err)
+
+	bodyMap := receivedBody["body"].(map[string]any)
+	storageMap := bodyMap["storage"].(map[string]any)
+	testutil.Equal(t, "<p>Storage content</p>", storageMap["value"].(string))
+	testutil.Nil(t, bodyMap["atlas_doc_format"])
+}
+
+// "--file - --no-markdown" passes raw ADF JSON through to atlas_doc_format
+// unconverted (the shape INT-425's create_page(format="adf") relies on).
+func TestRunCreate_FileDash_Stdin_NoMarkdown_ADF(t *testing.T) {
+	t.Parallel()
+	var receivedBody map[string]any
+	server := mockCreateBodyServer(t, &receivedBody)
+	defer server.Close()
+
+	adf := `{"type":"doc","version":1,"content":[]}`
+	rootOpts := newCreateTestRootOptions()
+	rootOpts.Stdin = strings.NewReader(adf)
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	useMd := false
+	opts := &createOptions{
+		Options:  rootOpts,
+		space:    "DEV",
+		title:    "Test Page",
+		file:     "-",
+		markdown: &useMd,
+	}
+
+	err := runCreate(context.Background(), opts)
+	testutil.RequireNoError(t, err)
+
+	bodyMap := receivedBody["body"].(map[string]any)
+	adfMap := bodyMap["atlas_doc_format"].(map[string]any)
+	testutil.Equal(t, adf, adfMap["value"].(string))
+}
+
+// "--file -" with empty stdin still hits the empty-content guard
+// (symmetric with TestRunEdit_FileDash_EmptyStdin).
+func TestRunCreate_FileDash_EmptyStdin(t *testing.T) {
+	t.Parallel()
+	var receivedBody map[string]any
+	server := mockCreateBodyServer(t, &receivedBody)
+	defer server.Close()
+
+	rootOpts := newCreateTestRootOptions()
+	rootOpts.Stdin = strings.NewReader("")
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &createOptions{
+		Options: rootOpts,
+		space:   "DEV",
+		title:   "Test Page",
+		file:    "-",
+	}
+
+	err := runCreate(context.Background(), opts)
+	testutil.RequireError(t, err)
+	testutil.Contains(t, err.Error(), "page content cannot be empty")
+}
+
+// "--file - --legacy" converts markdown stdin to storage XHTML.
+func TestRunCreate_FileDash_Stdin_Legacy(t *testing.T) {
+	t.Parallel()
+	var receivedBody map[string]any
+	server := mockCreateBodyServer(t, &receivedBody)
+	defer server.Close()
+
+	rootOpts := newCreateTestRootOptions()
+	rootOpts.Stdin = strings.NewReader("# Hello\n\nThis is **bold** text.")
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &createOptions{
+		Options: rootOpts,
+		space:   "DEV",
+		title:   "Test Page",
+		file:    "-",
+		legacy:  true,
+	}
+
+	err := runCreate(context.Background(), opts)
+	testutil.RequireNoError(t, err)
+
+	bodyMap := receivedBody["body"].(map[string]any)
+	storageMap := bodyMap["storage"].(map[string]any)
+	content := storageMap["value"].(string)
+	testutil.Contains(t, content, "<h1")
+	testutil.Contains(t, content, "<strong>bold</strong>")
+	testutil.Nil(t, bodyMap["atlas_doc_format"])
+}

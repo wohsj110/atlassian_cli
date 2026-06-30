@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>atk-jira</id>
+    <version>0.0.0</version>
+    <title>Jira Ticket CLI</title>
+    <authors>wohsj110</authors>
+    <owners>rianjs</owners>
+    <licenseUrl>https://github.com/wohsj110/atlassian_cli/blob/main/tools/atk-jira/LICENSE</licenseUrl>
+    <projectUrl>https://github.com/wohsj110/atlassian_cli/tree/main/tools/atk-jira#readme</projectUrl>
+    <projectSourceUrl>https://github.com/wohsj110/atlassian_cli</projectSourceUrl>
+    <packageSourceUrl>https://github.com/wohsj110/atlassian_cli/tree/main/tools/atk-jira/packaging/chocolatey</packageSourceUrl>
+    <bugTrackerUrl>https://github.com/wohsj110/atlassian_cli/issues</bugTrackerUrl>
+    <copyright>Copyright (c) 2025 wohsj110</copyright>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <description>A command-line interface for Jira Cloud. Manage issues, sprints, and workflows directly from your terminal.
+
+Features:
+- Create, view, update, and delete Jira issues
+- Transition issues through workflows
+- Manage sprint assignments
+- Search with JQL queries
+- Add and view comments
+
+Binary: atk-jira.exe</description>
+    <summary>Command-line interface for Jira Cloud</summary>
+    <releaseNotes>https://github.com/wohsj110/atlassian_cli/releases</releaseNotes>
+    <tags>jira atlassian cli ticket issue-tracking agile</tags>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>

@@ -1,0 +1,156 @@
+package issues
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/spf13/cobra"
+
+	"github.com/wohsj110/atlassian_cli/shared/present"
+
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/api"
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/internal/cmd/root"
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/internal/mutation"
+	atkpresent "github.com/wohsj110/atlassian_cli/tools/atk-jira/internal/present"
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/internal/resolve"
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/internal/text"
+)
+
+func newCreateCmd(opts *root.Options) *cobra.Command {
+	var project string
+	var issueType string
+	var summary string
+	var description string
+	var parent string
+	var assignee string
+	var fields []string
+
+	cmd := &cobra.Command{
+		Use:   "create",
+		Short: "Create a new issue",
+		Long:  "Create a new Jira issue with the specified fields.",
+		Example: `  # Project and type accept keys or names; assignee accepts name, email, accountId, or "me"
+  atk-jira issues create --project MYPROJECT --type Task --summary "Fix login bug"
+  atk-jira issues create --project "Platform Development" --type SDLC --summary "Fix login bug"
+
+  # Create with description
+  atk-jira issues create --project MYPROJECT --type Bug --summary "Login fails" --description "Users cannot log in with SSO"
+
+  # Create as child of an epic
+  atk-jira issues create --project MYPROJECT --type Task --summary "Subtask" --parent MYPROJECT-100
+
+  # Assign to yourself, by email, or by display name
+  atk-jira issues create --project MYPROJECT --type Task --summary "My task" --assignee me
+  atk-jira issues create --project MYPROJECT --type Task --summary "Their task" --assignee user@example.com
+  atk-jira issues create --project MYPROJECT --type Task --summary "Their task" --assignee "Aaron Wong"
+
+  # Create with custom fields
+  atk-jira issues create --project MYPROJECT --type Story --summary "New feature" --field priority=High`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runCreate(cmd.Context(), opts, project, issueType, summary, description, parent, assignee, fields)
+		},
+	}
+
+	cmd.Flags().StringVarP(&project, "project", "p", "", "Project key or name (required)")
+	cmd.Flags().StringVarP(&issueType, "type", "t", "Task", "Issue type name (resolved via cache)")
+	cmd.Flags().StringVarP(&summary, "summary", "s", "", "Issue summary (required)")
+	cmd.Flags().StringVarP(&description, "description", "d", "", "Issue description")
+	cmd.Flags().StringVar(&parent, "parent", "", "Parent issue key (epic or parent issue)")
+	cmd.Flags().StringVarP(&assignee, "assignee", "a", "", "Assignee: accountId, email, display name, or \"me\"")
+	cmd.Flags().StringArrayVarP(&fields, "field", "f", nil, "Additional fields (key=value)")
+
+	_ = cmd.MarkFlagRequired("project")
+	_ = cmd.MarkFlagRequired("summary")
+
+	return cmd
+}
+
+func runCreate(ctx context.Context, opts *root.Options, project, issueType, summary, description, parent, assignee string, fieldArgs []string) error {
+	client, err := opts.APIClient()
+	if err != nil {
+		return err
+	}
+
+	// Parse additional fields
+	extraFields := make(map[string]any)
+	if len(fieldArgs) > 0 {
+		// Get field metadata to resolve names to IDs
+		allFields, err := client.GetFields(ctx)
+		if err != nil {
+			return fmt.Errorf("getting field metadata: %w", err)
+		}
+
+		for _, f := range fieldArgs {
+			fieldID, field, value, err := api.ResolveFieldArg(allFields, f)
+			if err != nil {
+				return err
+			}
+
+			formatted := api.FormatFieldValue(field, value)
+			if existing, ok := extraFields[fieldID]; ok {
+				extraFields[fieldID] = api.MergeFieldValues(existing, formatted)
+			} else {
+				extraFields[fieldID] = formatted
+			}
+		}
+	}
+
+	if parent != "" {
+		extraFields["parent"] = map[string]string{"key": parent}
+	}
+
+	resolver := resolve.New(client)
+
+	resolvedProject, err := resolver.Project(ctx, project)
+	if err != nil {
+		return err
+	}
+	projectKey := resolvedProject.Key
+
+	resolvedType, err := resolver.IssueType(ctx, projectKey, issueType)
+	if err != nil {
+		return err
+	}
+	typeName := resolvedType.Name
+	if typeName == "" {
+		typeName = issueType
+	}
+
+	if assignee != "" {
+		resolvedUser, err := resolver.User(ctx, assignee)
+		if err != nil {
+			return err
+		}
+		extraFields["assignee"] = map[string]string{"accountId": resolvedUser.AccountID}
+	}
+
+	req := api.BuildCreateRequest(projectKey, typeName, summary, text.InterpretEscapes(description), extraFields)
+
+	issue, err := client.CreateIssue(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	if opts.EmitIDOnly() {
+		return atkpresent.EmitIDs(opts, []string{issue.Key})
+	}
+
+	// Write already executed above; the closure just provides the key.
+	return mutation.WriteAndPresent(ctx, opts, mutation.Config{
+		Write: func(_ context.Context) (string, error) {
+			return issue.Key, nil
+		},
+		Fetch: func(ctx context.Context, id string) (*present.OutputModel, error) {
+			fetched, err := client.GetIssue(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			return atkpresent.IssuePresenter{}.PresentDetail(
+				fetched, client.IssueURL(id), opts.IsExtended(), opts.IsFullText(),
+			), nil
+		},
+		Fallback: func(id string) *present.OutputModel {
+			return atkpresent.IssuePresenter{}.PresentCreated(id, client.IssueURL(id))
+		},
+	})
+}

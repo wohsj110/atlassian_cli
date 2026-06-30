@@ -1,0 +1,315 @@
+package issues
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/wohsj110/atlassian_cli/shared/testutil"
+
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/api"
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/internal/cache"
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/internal/cmd/root"
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/internal/present/projection"
+)
+
+// capturingGetServer handles both /issue/* and /field requests. Tests
+// introspect fieldsCalls to verify whether GetFields was invoked.
+type capturingGetServer struct {
+	server      *httptest.Server
+	fieldsCalls int
+	issueCalls  int
+}
+
+func newCapturingGetServer(t *testing.T, issue api.Issue, fieldsResp []api.Field) *capturingGetServer {
+	t.Helper()
+	cs := &capturingGetServer{}
+	cs.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/field") {
+			cs.fieldsCalls++
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(fieldsResp)
+			return
+		}
+		if strings.Contains(r.URL.Path, "/issue/") {
+			cs.issueCalls++
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(issue)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	return cs
+}
+
+func newGetOpts(t *testing.T, cs *capturingGetServer) (*root.Options, *bytes.Buffer, *bytes.Buffer) {
+	t.Helper()
+	client, err := api.New(api.ClientConfig{URL: cs.server.URL, Email: "e@x", APIToken: "t"})
+	testutil.RequireNoError(t, err)
+	var stdout, stderr bytes.Buffer
+	opts := &root.Options{Stdout: &stdout, Stderr: &stderr}
+	opts.SetAPIClient(client)
+	return opts, &stdout, &stderr
+}
+
+func fullIssue() api.Issue {
+	return api.Issue{
+		Key: "TEST-1",
+		Fields: api.IssueFields{
+			Summary:     "summary text",
+			Description: &api.Description{Text: "desc body"},
+			Status:      &api.Status{Name: "Open"},
+			IssueType:   &api.IssueType{Name: "Task"},
+			Priority:    &api.Priority{Name: "High"},
+			Assignee:    &api.User{DisplayName: "Alice"},
+			Project:     &api.Project{Key: "TEST"},
+		},
+	}
+}
+
+func TestRunGet_Fields_ProjectsDetailToSelected(t *testing.T) {
+	t.Parallel()
+	cs := newCapturingGetServer(t, fullIssue(), nil)
+	defer cs.server.Close()
+
+	opts, stdout, _ := newGetOpts(t, cs)
+	err := runGet(context.Background(), opts, "TEST-1", false, "Status", false)
+	testutil.RequireNoError(t, err)
+
+	output := stdout.String()
+	// Identity (Key) must always appear.
+	testutil.Contains(t, output, "Key: TEST-1")
+	testutil.Contains(t, output, "Status: Open")
+	// Dropped fields must NOT appear.
+	if strings.Contains(output, "Assignee") {
+		t.Errorf("Assignee should be dropped when --fields=Status: %q", output)
+	}
+	if strings.Contains(output, "Priority") {
+		t.Errorf("Priority should be dropped when --fields=Status: %q", output)
+	}
+}
+
+func TestRunGet_Fields_Points_Column(t *testing.T) {
+	t.Parallel()
+	cs := newCapturingGetServer(t, fullIssue(), nil)
+	defer cs.server.Close()
+
+	opts, stdout, _ := newGetOpts(t, cs)
+	err := runGet(context.Background(), opts, "TEST-1", false, "Points", false)
+	testutil.RequireNoError(t, err)
+
+	output := stdout.String()
+	testutil.Contains(t, output, "Key: TEST-1")
+	testutil.Contains(t, output, "Points:")
+}
+
+func TestRunGet_Fields_HumanName_TriggersFieldsFetch(t *testing.T) {
+	// Non-parallel: cache isolation uses process-global SetRootForTest.
+	t.Cleanup(cache.SetRootForTest(t.TempDir()))
+	cs := newCapturingGetServer(t, fullIssue(), []api.Field{
+		{ID: "issuetype", Name: "Issue Type"},
+	})
+	defer cs.server.Close()
+
+	opts, stdout, _ := newGetOpts(t, cs)
+	err := runGet(context.Background(), opts, "TEST-1", false, "Issue Type", false)
+	testutil.RequireNoError(t, err)
+
+	output := stdout.String()
+	testutil.Contains(t, output, "Key: TEST-1")
+	testutil.Contains(t, output, "Type: Task")
+	if cs.fieldsCalls != 1 {
+		t.Errorf("human-name resolution must trigger GetFields once; got %d", cs.fieldsCalls)
+	}
+}
+
+func TestRunGet_Fields_UnknownToken_Errors(t *testing.T) {
+	t.Parallel()
+	cs := newCapturingGetServer(t, fullIssue(), []api.Field{})
+	defer cs.server.Close()
+
+	opts, _, _ := newGetOpts(t, cs)
+	err := runGet(context.Background(), opts, "TEST-1", false, "bogus", false)
+	var ufe *projection.UnknownFieldError
+	if !errors.As(err, &ufe) {
+		t.Fatalf("expected UnknownFieldError, got %v", err)
+	}
+}
+
+func TestRunGet_Fields_DynamicField_ByFieldID_Succeeds(t *testing.T) {
+	// Non-parallel: cache isolation uses process-global SetRootForTest.
+	t.Cleanup(cache.SetRootForTest(t.TempDir()))
+	issue := fullIssue()
+	issue.Fields.CustomFields = map[string]any{
+		"customfield_99999": "phantom-value",
+	}
+	cs := newCapturingGetServer(t, issue, []api.Field{
+		{ID: "customfield_99999", Name: "Phantom"},
+	})
+	defer cs.server.Close()
+
+	opts, stdout, _ := newGetOpts(t, cs)
+	err := runGet(context.Background(), opts, "TEST-1", false, "customfield_99999", false)
+	testutil.RequireNoError(t, err)
+	testutil.Contains(t, stdout.String(), "phantom-value")
+}
+
+func TestRunGet_FieldsWithIDOnly_IDWins(t *testing.T) {
+	t.Parallel()
+	cs := newCapturingGetServer(t, fullIssue(), nil)
+	defer cs.server.Close()
+
+	opts, stdout, _ := newGetOpts(t, cs)
+	opts.IDOnly = true
+	err := runGet(context.Background(), opts, "TEST-1", false, "Status", false)
+	testutil.RequireNoError(t, err)
+
+	// Bare key on stdout; nothing else.
+	if stdout.String() != "TEST-1\n" {
+		t.Errorf("expected bare key, got %q", stdout.String())
+	}
+}
+
+// Under --id, projection.Resolve is skipped entirely. A human-name --fields
+// token would normally trigger a GetFields() call; --id must suppress it.
+func TestRunGet_IDOnly_SkipsFieldsResolution(t *testing.T) {
+	t.Parallel()
+	cs := newCapturingGetServer(t, fullIssue(), []api.Field{
+		{ID: "issuetype", Name: "Issue Type"},
+	})
+	defer cs.server.Close()
+
+	opts, _, _ := newGetOpts(t, cs)
+	opts.IDOnly = true
+	err := runGet(context.Background(), opts, "TEST-1", false, "Issue Type", false)
+	testutil.RequireNoError(t, err)
+	testutil.Equal(t, 0, cs.fieldsCalls)
+}
+
+func TestRunGet_IDOnly_BypassesFieldsValidation(t *testing.T) {
+	t.Parallel()
+	cs := newCapturingGetServer(t, fullIssue(), []api.Field{})
+	defer cs.server.Close()
+
+	opts, stdout, _ := newGetOpts(t, cs)
+	opts.IDOnly = true
+	err := runGet(context.Background(), opts, "TEST-1", false, "bogus", false)
+	testutil.RequireNoError(t, err)
+	if stdout.String() != "TEST-1\n" {
+		t.Errorf("expected bare key, got %q", stdout.String())
+	}
+}
+
+// fullIssueWithLongDescription returns a TEST-1 fixture whose Description
+// exceeds the 200-char truncation threshold so the body-vs-fulltext
+// interaction is observable.
+func fullIssueWithLongDescription() api.Issue {
+	issue := fullIssue()
+	issue.Fields.Description = &api.Description{Text: strings.Repeat("D", 300)}
+	return issue
+}
+
+// AC1 (issues get): description suppressed by --fields when not selected.
+// Long description text MUST be absent from output.
+func TestRunGet_Fields_SuppressesDescription_WhenNotSelected(t *testing.T) {
+	t.Parallel()
+	cs := newCapturingGetServer(t, fullIssueWithLongDescription(), nil)
+	defer cs.server.Close()
+
+	opts, stdout, _ := newGetOpts(t, cs)
+	err := runGet(context.Background(), opts, "TEST-1", false, "Summary,Status", false)
+	testutil.RequireNoError(t, err)
+
+	output := stdout.String()
+	testutil.Contains(t, output, "Key: TEST-1")
+	testutil.Contains(t, output, "Status: Open")
+	if strings.Contains(output, "Description") {
+		t.Errorf("Description label should not appear: %q", output)
+	}
+	if strings.Contains(output, "DDDD") {
+		t.Errorf("Description body text leaked into output: %q", output)
+	}
+}
+
+// AC1 (issues get): description selected without --fulltext is truncated.
+func TestRunGet_Fields_Description_TruncatedWithoutFullText(t *testing.T) {
+	t.Parallel()
+	cs := newCapturingGetServer(t, fullIssueWithLongDescription(), nil)
+	defer cs.server.Close()
+
+	opts, stdout, _ := newGetOpts(t, cs)
+	err := runGet(context.Background(), opts, "TEST-1", false, "Description", false)
+	testutil.RequireNoError(t, err)
+
+	output := stdout.String()
+	testutil.Contains(t, output, "Description:")
+	testutil.Contains(t, output, "truncated")
+}
+
+// AC1+AC3 (issues get): description selected WITH --fulltext shows full body
+// and no truncation marker.
+func TestRunGet_Fields_Description_FullTextWhenSelected(t *testing.T) {
+	t.Parallel()
+	cs := newCapturingGetServer(t, fullIssueWithLongDescription(), nil)
+	defer cs.server.Close()
+
+	opts, stdout, _ := newGetOpts(t, cs)
+	err := runGet(context.Background(), opts, "TEST-1", true, "Description", false)
+	testutil.RequireNoError(t, err)
+
+	output := stdout.String()
+	testutil.Contains(t, output, "Description:")
+	testutil.Contains(t, output, strings.Repeat("D", 300))
+	testutil.NotContains(t, output, "[truncated")
+}
+
+// AC3 (issues get): --fulltext is a no-op when Description is not selected.
+// Output must not contain description text even though noTruncate=true.
+func TestRunGet_Fields_FullTextNoOp_WhenDescriptionNotSelected(t *testing.T) {
+	t.Parallel()
+	cs := newCapturingGetServer(t, fullIssueWithLongDescription(), nil)
+	defer cs.server.Close()
+
+	opts, stdout, _ := newGetOpts(t, cs)
+	err := runGet(context.Background(), opts, "TEST-1", true, "Summary", false)
+	testutil.RequireNoError(t, err)
+
+	output := stdout.String()
+	testutil.Contains(t, output, "Summary:")
+	if strings.Contains(output, "Description") {
+		t.Errorf("Description label should not appear: %q", output)
+	}
+	if strings.Contains(output, "DDDD") {
+		t.Errorf("Description body text leaked even though Description not selected: %q", output)
+	}
+}
+
+// TestRunGet_Fields_HumanName_CacheHit_SkipsFieldsFetch verifies that when the
+// fields cache is fresh, a human-name --fields token is resolved from the cache
+// and the live /field endpoint is not called.
+// Non-parallel: SetRootForTest / SetInstanceKeyForTest are process-globals.
+func TestRunGet_Fields_HumanName_CacheHit_SkipsFieldsFetch(t *testing.T) {
+	seedCacheForIssues(t)
+	testutil.RequireNoError(t, cache.WriteResource("fields", "24h", []api.Field{
+		{ID: "issuetype", Name: "Issue Type"},
+	}))
+
+	cs := newCapturingGetServer(t, fullIssue(), nil)
+	defer cs.server.Close()
+
+	opts, stdout, _ := newGetOpts(t, cs)
+	err := runGet(context.Background(), opts, "TEST-1", false, "Issue Type", false)
+	testutil.RequireNoError(t, err)
+
+	output := stdout.String()
+	testutil.Contains(t, output, "Key: TEST-1")
+	testutil.Contains(t, output, "Type: Task")
+	if cs.fieldsCalls != 0 {
+		t.Errorf("fresh cache must suppress live GetFields; got %d call(s)", cs.fieldsCalls)
+	}
+}

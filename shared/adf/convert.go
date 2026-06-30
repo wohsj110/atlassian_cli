@@ -1,0 +1,512 @@
+// Package adf provides Atlassian Document Format (ADF) conversion from markdown.
+package adf
+
+import (
+	"encoding/json"
+	"strings"
+
+	"github.com/gohugoio/hugo-goldmark-extensions/extras"
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	extast "github.com/yuin/goldmark/extension/ast"
+	"github.com/yuin/goldmark/text"
+)
+
+// mdParser is a goldmark parser for standard markdown input.
+// Uses extras.Delete for ~~text~~ strikethrough (double-tilde only) and tables.
+// Does NOT enable subscript/superscript/insert to avoid mangling tildes and
+// carets in compound words (e.g., "signal~webapp~frontend").
+// Note: extension.Strikethrough is NOT used because it matches both single
+// (~text~) and double (~~text~~) tildes, which would mangle compound words.
+var mdParser = goldmark.New(
+	goldmark.WithExtensions(
+		extension.Table,
+		extras.New(extras.Config{
+			Delete: extras.DeleteConfig{Enable: true},
+		}),
+	),
+)
+
+// wikiParser is a goldmark parser for wiki-converted markdown.
+// Enables hugo-goldmark-extensions/extras for subscript (~text~),
+// superscript (^text^), delete (~~text~~), and insert (++text++)
+// which produce proper ADF marks (subsup, strike, underline).
+// Only used when input has been detected as wiki markup and converted
+// by WikiToADFMarkdown, so the tilde/caret patterns are intentional.
+var wikiParser = goldmark.New(
+	goldmark.WithExtensions(
+		extension.Table,
+		extras.New(extras.Config{
+			Subscript:   extras.SubscriptConfig{Enable: true},
+			Superscript: extras.SuperscriptConfig{Enable: true},
+			Delete:      extras.DeleteConfig{Enable: true},
+			Insert:      extras.InsertConfig{Enable: true},
+		}),
+	),
+)
+
+// ToDocument converts markdown text to an ADF Document struct.
+// Uses the standard parser (no subscript/superscript/insert).
+// Returns nil for empty input. If parsing yields no content,
+// falls back to a single paragraph with the raw text.
+func ToDocument(markdown string) *Document {
+	return toDocument(markdown, mdParser)
+}
+
+func toDocument(markdown string, parser goldmark.Markdown) *Document {
+	if markdown == "" {
+		return nil
+	}
+
+	source := []byte(markdown)
+	reader := text.NewReader(source)
+	astDoc := parser.Parser().Parse(reader)
+
+	converter := &converter{source: source}
+	content := converter.convertChildren(astDoc)
+
+	if len(content) == 0 {
+		return &Document{
+			Type:    "doc",
+			Version: 1,
+			Content: []*Node{
+				{
+					Type:    "paragraph",
+					Content: []*Node{{Type: "text", Text: markdown}},
+				},
+			},
+		}
+	}
+
+	return &Document{
+		Type:    "doc",
+		Version: 1,
+		Content: content,
+	}
+}
+
+// ToDocumentWiki converts wiki-converted markdown to an ADF Document struct.
+// Uses the extended parser with subscript, superscript, delete, and insert
+// support. Only call this when the input has been converted from wiki markup
+// via WikiToADFMarkdown, where ~text~ and ^text^ patterns are intentional.
+func ToDocumentWiki(markdown string) *Document {
+	return toDocument(markdown, wikiParser)
+}
+
+// ToJSON converts markdown to an ADF JSON string.
+// Uses the standard parser (same as ToDocument) — no subscript/superscript/insert.
+// Wiki-converted markdown with ~text~ or ^text^ patterns should use
+// ToDocumentWiki instead. Returns an empty document JSON for empty input.
+func ToJSON(markdown []byte) (string, error) {
+	doc := &Document{
+		Type:    "doc",
+		Version: 1,
+		Content: []*Node{},
+	}
+
+	if len(markdown) == 0 {
+		result, err := json.Marshal(doc)
+		if err != nil {
+			return "", err
+		}
+		return string(result), nil
+	}
+
+	reader := text.NewReader(markdown)
+	astDoc := mdParser.Parser().Parse(reader)
+
+	c := &converter{source: markdown}
+	doc.Content = c.convertChildren(astDoc)
+
+	result, err := json.Marshal(doc)
+	if err != nil {
+		return "", err
+	}
+	return string(result), nil
+}
+
+// converter holds state during AST-to-ADF conversion.
+type converter struct {
+	source []byte
+}
+
+// convertChildren converts all children of an AST node to ADF nodes.
+func (c *converter) convertChildren(n ast.Node) []*Node {
+	var nodes []*Node
+	for child := n.FirstChild(); child != nil; child = child.NextSibling() {
+		if node := c.convertNode(child); node != nil {
+			nodes = append(nodes, node)
+		}
+	}
+	return nodes
+}
+
+// convertNode converts a single AST node to an ADF node.
+func (c *converter) convertNode(n ast.Node) *Node {
+	switch node := n.(type) {
+	case *ast.Paragraph:
+		return c.convertParagraph(node)
+	case *ast.Heading:
+		return c.convertHeading(node)
+	case *ast.List:
+		return c.convertList(node)
+	case *ast.ListItem:
+		return c.convertListItem(node)
+	case *ast.FencedCodeBlock:
+		return c.convertFencedCodeBlock(node)
+	case *ast.CodeBlock:
+		return c.convertCodeBlock(node)
+	case *ast.Blockquote:
+		return c.convertBlockquote(node)
+	case *ast.ThematicBreak:
+		return &Node{Type: "rule"}
+	case *extast.Table:
+		return c.convertTable(node)
+	case *ast.TextBlock:
+		return c.convertTextBlockToParagraph(node)
+	default:
+		return nil
+	}
+}
+
+func (c *converter) convertParagraph(n *ast.Paragraph) *Node {
+	content := c.convertInlineChildren(n)
+	if len(content) == 0 {
+		return nil
+	}
+	return &Node{
+		Type:    "paragraph",
+		Content: content,
+	}
+}
+
+func (c *converter) convertHeading(n *ast.Heading) *Node {
+	return &Node{
+		Type:    "heading",
+		Attrs:   map[string]any{"level": n.Level},
+		Content: c.convertInlineChildren(n),
+	}
+}
+
+func (c *converter) convertList(n *ast.List) *Node {
+	listType := "bulletList"
+	var attrs map[string]any
+	if n.IsOrdered() {
+		listType = "orderedList"
+		attrs = map[string]any{"order": n.Start}
+	}
+
+	return &Node{
+		Type:    listType,
+		Attrs:   attrs,
+		Content: c.convertChildren(n),
+	}
+}
+
+func (c *converter) convertListItem(n *ast.ListItem) *Node {
+	var content []*Node
+	for child := n.FirstChild(); child != nil; child = child.NextSibling() {
+		switch ch := child.(type) {
+		case *ast.TextBlock:
+			para := c.convertTextBlockToParagraph(ch)
+			if para != nil {
+				content = append(content, para)
+			}
+		case *ast.Paragraph:
+			para := c.convertParagraph(ch)
+			if para != nil {
+				content = append(content, para)
+			}
+		case *ast.List:
+			list := c.convertList(ch)
+			if list != nil {
+				content = append(content, list)
+			}
+		default:
+			if node := c.convertNode(child); node != nil {
+				content = append(content, node)
+			}
+		}
+	}
+
+	return &Node{
+		Type:    "listItem",
+		Content: content,
+	}
+}
+
+func (c *converter) convertTextBlockToParagraph(n *ast.TextBlock) *Node {
+	content := c.convertInlineChildren(n)
+	if len(content) == 0 {
+		return nil
+	}
+	return &Node{
+		Type:    "paragraph",
+		Content: content,
+	}
+}
+
+func (c *converter) convertFencedCodeBlock(n *ast.FencedCodeBlock) *Node {
+	var code strings.Builder
+	lines := n.Lines()
+	for i := 0; i < lines.Len(); i++ {
+		line := lines.At(i)
+		code.Write(line.Value(c.source))
+	}
+
+	codeStr := strings.TrimSuffix(code.String(), "\n")
+
+	node := &Node{Type: "codeBlock"}
+	if codeStr != "" {
+		node.Content = []*Node{{Type: "text", Text: codeStr}}
+	}
+
+	if lang := string(n.Language(c.source)); lang != "" {
+		node.Attrs = map[string]any{"language": lang}
+	}
+
+	return node
+}
+
+func (c *converter) convertCodeBlock(n *ast.CodeBlock) *Node {
+	var code strings.Builder
+	lines := n.Lines()
+	for i := 0; i < lines.Len(); i++ {
+		line := lines.At(i)
+		code.Write(line.Value(c.source))
+	}
+
+	codeStr := strings.TrimSuffix(code.String(), "\n")
+
+	node := &Node{Type: "codeBlock"}
+	if codeStr != "" {
+		node.Content = []*Node{{Type: "text", Text: codeStr}}
+	}
+	return node
+}
+
+func (c *converter) convertBlockquote(n *ast.Blockquote) *Node {
+	return &Node{
+		Type:    "blockquote",
+		Content: c.convertChildren(n),
+	}
+}
+
+func (c *converter) convertTable(n *extast.Table) *Node {
+	var rows []*Node
+	isFirstRow := true
+
+	for child := n.FirstChild(); child != nil; child = child.NextSibling() {
+		if row, ok := child.(*extast.TableRow); ok {
+			rows = append(rows, c.convertTableRow(row, isFirstRow))
+			isFirstRow = false
+		} else if header, ok := child.(*extast.TableHeader); ok {
+			rows = append(rows, c.convertTableHeader(header))
+			isFirstRow = false
+		}
+	}
+
+	return &Node{
+		Type:    "table",
+		Attrs:   map[string]any{"layout": "default"},
+		Content: rows,
+	}
+}
+
+func (c *converter) convertTableHeader(n *extast.TableHeader) *Node {
+	var cells []*Node
+	for child := n.FirstChild(); child != nil; child = child.NextSibling() {
+		if cell, ok := child.(*extast.TableCell); ok {
+			cells = append(cells, c.convertTableCell(cell, true))
+		}
+	}
+	return &Node{
+		Type:    "tableRow",
+		Content: cells,
+	}
+}
+
+func (c *converter) convertTableRow(n *extast.TableRow, isHeader bool) *Node {
+	var cells []*Node
+	for child := n.FirstChild(); child != nil; child = child.NextSibling() {
+		if cell, ok := child.(*extast.TableCell); ok {
+			cells = append(cells, c.convertTableCell(cell, isHeader))
+		}
+	}
+	return &Node{
+		Type:    "tableRow",
+		Content: cells,
+	}
+}
+
+func (c *converter) convertTableCell(n *extast.TableCell, isHeader bool) *Node {
+	cellType := "tableCell"
+	if isHeader {
+		cellType = "tableHeader"
+	}
+
+	content := c.convertInlineChildren(n)
+	para := &Node{Type: "paragraph"}
+	if len(content) > 0 {
+		para.Content = content
+	}
+
+	return &Node{
+		Type:    cellType,
+		Attrs:   map[string]any{"colspan": 1, "rowspan": 1},
+		Content: []*Node{para},
+	}
+}
+
+// convertInlineChildren converts all inline children of an AST node to ADF text nodes.
+func (c *converter) convertInlineChildren(n ast.Node) []*Node {
+	var nodes []*Node
+	for child := n.FirstChild(); child != nil; child = child.NextSibling() {
+		textNodes := c.convertInlineNode(child, nil)
+		nodes = append(nodes, textNodes...)
+	}
+	return nodes
+}
+
+// convertInlineNode converts an inline AST node to ADF text node(s).
+func (c *converter) convertInlineNode(n ast.Node, marks []*Mark) []*Node {
+	switch node := n.(type) {
+	case *ast.Text:
+		txt := string(node.Segment.Value(c.source))
+		if txt == "" {
+			return nil
+		}
+		adfNode := &Node{Type: "text", Text: txt}
+		if len(marks) > 0 {
+			adfNode.Marks = marks
+		}
+		var result []*Node
+		result = append(result, adfNode)
+		if node.HardLineBreak() {
+			result = append(result, &Node{Type: "hardBreak"})
+		}
+		return result
+
+	case *ast.String:
+		txt := string(node.Value)
+		if txt == "" {
+			return nil
+		}
+		adfNode := &Node{Type: "text", Text: txt}
+		if len(marks) > 0 {
+			adfNode.Marks = marks
+		}
+		return []*Node{adfNode}
+
+	case *ast.Emphasis:
+		markType := "em"
+		if node.Level == 2 {
+			markType = "strong"
+		}
+		newMarks := append(copyMarks(marks), &Mark{Type: markType})
+		var nodes []*Node
+		for child := node.FirstChild(); child != nil; child = child.NextSibling() {
+			nodes = append(nodes, c.convertInlineNode(child, newMarks)...)
+		}
+		return nodes
+
+	case *ast.CodeSpan:
+		var textBuilder strings.Builder
+		for child := node.FirstChild(); child != nil; child = child.NextSibling() {
+			if textNode, ok := child.(*ast.Text); ok {
+				textBuilder.Write(textNode.Segment.Value(c.source))
+			}
+		}
+		txt := textBuilder.String()
+		newMarks := append(copyMarks(marks), &Mark{Type: "code"})
+		return []*Node{{Type: "text", Text: txt, Marks: newMarks}}
+
+	case *ast.Link:
+		linkMark := &Mark{
+			Type:  "link",
+			Attrs: map[string]any{"href": string(node.Destination)},
+		}
+		newMarks := append(copyMarks(marks), linkMark)
+		var nodes []*Node
+		for child := node.FirstChild(); child != nil; child = child.NextSibling() {
+			nodes = append(nodes, c.convertInlineNode(child, newMarks)...)
+		}
+		return nodes
+
+	case *ast.AutoLink:
+		url := string(node.URL(c.source))
+		linkMark := &Mark{
+			Type:  "link",
+			Attrs: map[string]any{"href": url},
+		}
+		newMarks := append(copyMarks(marks), linkMark)
+		return []*Node{{Type: "text", Text: url, Marks: newMarks}}
+
+	case *ast.RawHTML:
+		return nil
+
+	case *ast.Image:
+		var altBuilder strings.Builder
+		for child := node.FirstChild(); child != nil; child = child.NextSibling() {
+			if textNode, ok := child.(*ast.Text); ok {
+				altBuilder.Write(textNode.Segment.Value(c.source))
+			}
+		}
+		alt := altBuilder.String()
+		if alt == "" {
+			alt = string(node.Destination)
+		}
+		adfNode := &Node{Type: "text", Text: alt}
+		if len(marks) > 0 {
+			adfNode.Marks = marks
+		}
+		return []*Node{adfNode}
+
+	default:
+		// Handle hugo-goldmark-extensions/extras inline tags by Kind.
+		// These use an unexported node type, so we match on Kind instead
+		// of a type assertion.
+		if mark := extrasKindToMark(n.Kind()); mark != nil {
+			newMarks := append(copyMarks(marks), mark)
+			var nodes []*Node
+			for child := n.FirstChild(); child != nil; child = child.NextSibling() {
+				nodes = append(nodes, c.convertInlineNode(child, newMarks)...)
+			}
+			return nodes
+		}
+
+		var nodes []*Node
+		for child := n.FirstChild(); child != nil; child = child.NextSibling() {
+			nodes = append(nodes, c.convertInlineNode(child, marks)...)
+		}
+		return nodes
+	}
+}
+
+// extrasKindToMark maps hugo-goldmark-extensions/extras AST node kinds to
+// their corresponding ADF marks per the Atlassian Document Format spec.
+func extrasKindToMark(kind ast.NodeKind) *Mark {
+	switch kind {
+	case extras.KindDelete:
+		return &Mark{Type: "strike"}
+	case extras.KindSubscript:
+		return &Mark{Type: "subsup", Attrs: map[string]any{"type": "sub"}}
+	case extras.KindSuperscript:
+		return &Mark{Type: "subsup", Attrs: map[string]any{"type": "sup"}}
+	case extras.KindInsert:
+		return &Mark{Type: "underline"}
+	default:
+		return nil
+	}
+}
+
+// copyMarks creates a copy of the marks slice.
+func copyMarks(marks []*Mark) []*Mark {
+	if marks == nil {
+		return nil
+	}
+	result := make([]*Mark, len(marks))
+	copy(result, marks)
+	return result
+}

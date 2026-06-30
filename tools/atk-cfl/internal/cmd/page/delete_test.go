@@ -1,0 +1,321 @@
+package page
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/wohsj110/atlassian_cli/shared/prompt"
+	"github.com/wohsj110/atlassian_cli/shared/testutil"
+
+	"github.com/wohsj110/atlassian_cli/tools/atk-cfl/api"
+	"github.com/wohsj110/atlassian_cli/tools/atk-cfl/internal/cmd/root"
+)
+
+// mockPageServer creates a test server that handles GetPage and DeletePage requests
+func mockPageServer(t *testing.T, pageID, title string, deleteStatus int) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && strings.Contains(r.URL.Path, "/pages/"+pageID):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{
+				"id": "` + pageID + `",
+				"title": "` + title + `",
+				"spaceId": "123456",
+				"version": {"number": 1}
+			}`))
+		case r.Method == "DELETE" && strings.Contains(r.URL.Path, "/pages/"+pageID):
+			w.WriteHeader(deleteStatus)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
+
+func newDeleteTestRootOptions() *root.Options {
+	return &root.Options{
+		Output:  "table",
+		NoColor: true,
+		Stdin:   strings.NewReader(""),
+		Stdout:  &bytes.Buffer{},
+		Stderr:  &bytes.Buffer{},
+	}
+}
+
+func TestRunDelete_ConfirmYes(t *testing.T) {
+	t.Parallel()
+	server := mockPageServer(t, "12345", "Test Page", http.StatusNoContent)
+	defer server.Close()
+
+	rootOpts := newDeleteTestRootOptions()
+	rootOpts.Stdin = strings.NewReader("y\n")
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &deleteOptions{
+		Options: rootOpts,
+		force:   false,
+	}
+
+	err := runDelete(context.Background(), "12345", opts)
+	testutil.RequireNoError(t, err)
+	testutil.Equal(t, "Deleted page: Test Page (ID: 12345)\n", rootOpts.Stdout.(*bytes.Buffer).String())
+	testutil.Equal(t, "About to delete page: Test Page (ID: 12345)\nAre you sure? [y/N]: ", rootOpts.Stderr.(*bytes.Buffer).String())
+}
+
+func TestRunDelete_ConfirmYesUppercase(t *testing.T) {
+	t.Parallel()
+	server := mockPageServer(t, "12345", "Test Page", http.StatusNoContent)
+	defer server.Close()
+
+	rootOpts := newDeleteTestRootOptions()
+	rootOpts.Stdin = strings.NewReader("Y\n")
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &deleteOptions{
+		Options: rootOpts,
+		force:   false,
+	}
+
+	err := runDelete(context.Background(), "12345", opts)
+	testutil.RequireNoError(t, err)
+	testutil.Equal(t, "Deleted page: Test Page (ID: 12345)\n", rootOpts.Stdout.(*bytes.Buffer).String())
+	testutil.Equal(t, "About to delete page: Test Page (ID: 12345)\nAre you sure? [y/N]: ", rootOpts.Stderr.(*bytes.Buffer).String())
+}
+
+func TestRunDelete_ConfirmNo(t *testing.T) {
+	t.Parallel()
+	server := mockPageServer(t, "12345", "Test Page", http.StatusNoContent)
+	defer server.Close()
+
+	rootOpts := newDeleteTestRootOptions()
+	rootOpts.Stdin = strings.NewReader("n\n")
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &deleteOptions{
+		Options: rootOpts,
+		force:   false,
+	}
+
+	err := runDelete(context.Background(), "12345", opts)
+	testutil.RequireNoError(t, err) // Cancellation is not an error
+	testutil.Equal(t, "", rootOpts.Stdout.(*bytes.Buffer).String())
+	testutil.Equal(t, "About to delete page: Test Page (ID: 12345)\nAre you sure? [y/N]: Deletion cancelled.\n", rootOpts.Stderr.(*bytes.Buffer).String())
+}
+
+func TestRunDelete_ConfirmEmpty(t *testing.T) {
+	t.Parallel()
+	server := mockPageServer(t, "12345", "Test Page", http.StatusNoContent)
+	defer server.Close()
+
+	rootOpts := newDeleteTestRootOptions()
+	rootOpts.Stdin = strings.NewReader("\n")
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &deleteOptions{
+		Options: rootOpts,
+		force:   false,
+	}
+
+	err := runDelete(context.Background(), "12345", opts)
+	testutil.RequireNoError(t, err) // Empty input should cancel
+	testutil.Equal(t, "", rootOpts.Stdout.(*bytes.Buffer).String())
+	testutil.Equal(t, "About to delete page: Test Page (ID: 12345)\nAre you sure? [y/N]: Deletion cancelled.\n", rootOpts.Stderr.(*bytes.Buffer).String())
+}
+
+func TestRunDelete_ConfirmOther(t *testing.T) {
+	t.Parallel()
+	server := mockPageServer(t, "12345", "Test Page", http.StatusNoContent)
+	defer server.Close()
+
+	rootOpts := newDeleteTestRootOptions()
+	rootOpts.Stdin = strings.NewReader("maybe\n")
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &deleteOptions{
+		Options: rootOpts,
+		force:   false,
+	}
+
+	err := runDelete(context.Background(), "12345", opts)
+	testutil.RequireNoError(t, err) // Any non-y/Y input should cancel
+	testutil.Equal(t, "", rootOpts.Stdout.(*bytes.Buffer).String())
+	testutil.Equal(t, "About to delete page: Test Page (ID: 12345)\nAre you sure? [y/N]: Deletion cancelled.\n", rootOpts.Stderr.(*bytes.Buffer).String())
+}
+
+func TestRunDelete_Force(t *testing.T) {
+	t.Parallel()
+	server := mockPageServer(t, "12345", "Test Page", http.StatusNoContent)
+	defer server.Close()
+
+	rootOpts := newDeleteTestRootOptions()
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &deleteOptions{
+		Options: rootOpts,
+		force:   true,
+	}
+
+	err := runDelete(context.Background(), "12345", opts)
+	testutil.RequireNoError(t, err)
+	testutil.Equal(t, "Deleted page: Test Page (ID: 12345)\n", rootOpts.Stdout.(*bytes.Buffer).String())
+	testutil.Equal(t, "", rootOpts.Stderr.(*bytes.Buffer).String())
+}
+
+func TestRunDelete_PageNotFound(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message": "Page not found"}`))
+	}))
+	defer server.Close()
+
+	rootOpts := newDeleteTestRootOptions()
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &deleteOptions{
+		Options: rootOpts,
+		force:   true,
+	}
+
+	err := runDelete(context.Background(), "99999", opts)
+	testutil.RequireError(t, err)
+	testutil.Contains(t, err.Error(), "getting page")
+	testutil.NotContains(t, err.Error(), "getting page: getting page:")
+}
+
+func TestRunDelete_DeleteFailed(t *testing.T) {
+	t.Parallel()
+	server := mockPageServer(t, "12345", "Test Page", http.StatusForbidden)
+	defer server.Close()
+
+	rootOpts := newDeleteTestRootOptions()
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &deleteOptions{
+		Options: rootOpts,
+		force:   true,
+	}
+
+	err := runDelete(context.Background(), "12345", opts)
+	testutil.RequireError(t, err)
+	testutil.Contains(t, err.Error(), "deleting page")
+	testutil.NotContains(t, err.Error(), "deleting page: deleting page")
+}
+
+func TestRunDelete_ConfirmationInputs(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name          string
+		input         string
+		shouldProceed bool
+	}{
+		{"lowercase y", "y\n", true},
+		{"uppercase Y", "Y\n", true},
+		{"lowercase n", "n\n", false},
+		{"uppercase N", "N\n", false},
+		{"empty input", "\n", false},
+		{"other input", "yes\n", false},
+		{"whitespace", "  \n", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			// Track if delete was called
+			deleteCalled := false
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == "DELETE" {
+					deleteCalled = true
+					w.WriteHeader(http.StatusNoContent)
+					return
+				}
+				// GET request for page info
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"id": "12345", "title": "Test", "version": {"number": 1}}`))
+			}))
+			defer server.Close()
+
+			rootOpts := newDeleteTestRootOptions()
+			rootOpts.Stdin = strings.NewReader(tt.input)
+			client := api.NewClient(server.URL, "test@example.com", "token")
+			rootOpts.SetAPIClient(client)
+
+			opts := &deleteOptions{
+				Options: rootOpts,
+				force:   false,
+			}
+
+			err := runDelete(context.Background(), "12345", opts)
+			testutil.RequireNoError(t, err)
+			testutil.Equal(t, deleteCalled, tt.shouldProceed)
+		})
+	}
+}
+
+// TestRunDelete_NonInteractive_WithoutForce_ShortCircuits — §3.4 contract
+// + the API-lookup-before-confirm short-circuit: --non-interactive
+// without --force MUST surface ErrConfirmationRequired BEFORE the
+// API.GetPage call, so a missing or auth-failing endpoint never wins
+// over the confirmation policy. Asserts the server is never hit.
+func TestRunDelete_NonInteractive_WithoutForce_ShortCircuits(t *testing.T) {
+	t.Parallel()
+
+	var hits int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	rootOpts := newDeleteTestRootOptions()
+	rootOpts.NonInteractive = true
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &deleteOptions{Options: rootOpts, force: false}
+	err := runDelete(context.Background(), "12345", opts)
+	if err == nil {
+		t.Fatal("expected ErrConfirmationRequired")
+	}
+	if !errors.Is(err, prompt.ErrConfirmationRequired) {
+		t.Fatalf("expected prompt.ErrConfirmationRequired, got %v", err)
+	}
+	if hits != 0 {
+		t.Fatalf("API must not be called under --non-interactive without --force; got %d hits", hits)
+	}
+	if rootOpts.Stderr.(*bytes.Buffer).Len() != 0 {
+		t.Fatalf("stderr must be empty: %q", rootOpts.Stderr.(*bytes.Buffer).String())
+	}
+}
+
+// TestRunDelete_NonInteractive_WithForce_Proceeds — --force still
+// bypasses confirmation under --non-interactive, so the existing
+// automation contract is preserved.
+func TestRunDelete_NonInteractive_WithForce_Proceeds(t *testing.T) {
+	t.Parallel()
+	server := mockPageServer(t, "12345", "Test Page", http.StatusNoContent)
+	defer server.Close()
+
+	rootOpts := newDeleteTestRootOptions()
+	rootOpts.NonInteractive = true
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &deleteOptions{Options: rootOpts, force: true}
+	err := runDelete(context.Background(), "12345", opts)
+	testutil.RequireNoError(t, err)
+}

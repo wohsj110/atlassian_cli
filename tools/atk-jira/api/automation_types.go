@@ -1,0 +1,187 @@
+package api //nolint:revive // package name is intentional
+
+import (
+	"encoding/json"
+
+	"github.com/wohsj110/atlassian_cli/shared/atime"
+)
+
+// AutomationRule represents a full automation rule.
+//
+// Note: Jira's Automation API shapes vary between endpoints and have changed
+// over time. We keep fields that cover both the documented/legacy responses
+// and the actual responses observed in the wild.
+type AutomationRule struct {
+	// Legacy numeric ID (may be absent).
+	ID json.Number `json:"id,omitempty"`
+
+	// Preferred identifier in newer Cloud responses.
+	UUID string `json:"uuid,omitempty"`
+
+	// Legacy UUID field name used in some older responses.
+	RuleKey string `json:"ruleKey,omitempty"`
+
+	Name            string               `json:"name"`
+	State           string               `json:"state"`
+	Description     string               `json:"description,omitempty"`
+	AuthorAccountID string               `json:"authorAccountId,omitempty"`
+	ActorAccountID  string               `json:"actorAccountId,omitempty"`
+	Labels          []string             `json:"labels,omitempty"`
+	Tags            []string             `json:"tags,omitempty"`
+	Projects        []RuleProject        `json:"projects,omitempty"`
+	Created         *atime.AtlassianTime `json:"created,omitempty"`
+	Updated         *atime.AtlassianTime `json:"updated,omitempty"`
+	Trigger         *RuleComponent       `json:"trigger,omitempty"`
+	Components      []RuleComponent      `json:"components,omitempty"`
+
+	// Newer Cloud responses represent scope as ARIs rather than projects.
+	RuleScopeARIs []string `json:"ruleScopeARIs,omitempty"`
+
+	// Preserve unknown fields for round-trip fidelity.
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// Identifier returns the best available identifier for the rule (UUID, RuleKey, or ID).
+func (r AutomationRule) Identifier() string {
+	if r.UUID != "" {
+		return r.UUID
+	}
+	if r.RuleKey != "" {
+		return r.RuleKey
+	}
+	if r.ID.String() != "" {
+		return r.ID.String()
+	}
+	return ""
+}
+
+// RuleProject identifies a project associated with a rule.
+type RuleProject struct {
+	ProjectID   string `json:"projectId,omitempty"`
+	ProjectKey  string `json:"projectKey,omitempty"`
+	ProjectName string `json:"projectName,omitempty"`
+}
+
+// RuleComponent represents a trigger, condition, or action in an automation rule.
+// The Value field is kept as raw JSON because component schemas are undocumented.
+type RuleComponent struct {
+	ID            string          `json:"id,omitempty"`
+	Component     string          `json:"component"`
+	Type          string          `json:"type"`
+	Value         json.RawMessage `json:"value,omitempty"`
+	SchemaVersion int             `json:"schemaVersion,omitempty"`
+	ParentID      string          `json:"parentId,omitempty"`
+	Children      json.RawMessage `json:"children,omitempty"`
+	Conditions    json.RawMessage `json:"conditions,omitempty"`
+	ConnectionID  string          `json:"connectionId,omitempty"`
+}
+
+// DecodedChildren decodes the Children json.RawMessage into a slice of RuleComponent.
+func (c *RuleComponent) DecodedChildren() []RuleComponent {
+	if len(c.Children) == 0 {
+		return nil
+	}
+	var children []RuleComponent
+	if json.Unmarshal(c.Children, &children) != nil {
+		return nil
+	}
+	return children
+}
+
+// DecodedConditions decodes the Conditions json.RawMessage into a slice of RuleComponent.
+func (c *RuleComponent) DecodedConditions() []RuleComponent {
+	if len(c.Conditions) == 0 {
+		return nil
+	}
+	var conditions []RuleComponent
+	if json.Unmarshal(c.Conditions, &conditions) != nil {
+		return nil
+	}
+	return conditions
+}
+
+// AutomationRuleSummary is the lighter representation returned by the list/summary endpoint.
+type AutomationRuleSummary struct {
+	// Legacy numeric ID (may be absent).
+	ID json.Number `json:"id,omitempty"`
+
+	// Preferred identifier in newer Cloud responses.
+	UUID string `json:"uuid,omitempty"`
+
+	// Legacy UUID field name used in some older responses.
+	RuleKey string `json:"ruleKey,omitempty"`
+
+	Name            string               `json:"name"`
+	State           string               `json:"state"`
+	Description     string               `json:"description,omitempty"`
+	AuthorAccountID string               `json:"authorAccountId,omitempty"`
+	ActorAccountID  string               `json:"actorAccountId,omitempty"`
+	Labels          []string             `json:"labels,omitempty"`
+	Tags            []string             `json:"tags,omitempty"`
+	Projects        []RuleProject        `json:"projects,omitempty"`
+	Created         *atime.AtlassianTime `json:"created,omitempty"`
+	Updated         *atime.AtlassianTime `json:"updated,omitempty"`
+	RuleScopeARIs   []string             `json:"ruleScopeARIs,omitempty"`
+}
+
+// Identifier returns the best available identifier for the rule summary (UUID, RuleKey, or ID).
+func (s AutomationRuleSummary) Identifier() string {
+	if s.UUID != "" {
+		return s.UUID
+	}
+	if s.RuleKey != "" {
+		return s.RuleKey
+	}
+	if s.ID.String() != "" {
+		return s.ID.String()
+	}
+	return ""
+}
+
+type automationLinks struct {
+	Self *string `json:"self"`
+	Next *string `json:"next"`
+	Prev *string `json:"prev"`
+}
+
+// AutomationRuleSummaryResponse is the paginated list response.
+//
+// Observed Cloud shape:
+//
+//	{"links": {"self": null, "next": null, "prev": null}, "data": [...]}
+//
+// Legacy/documented shape (kept for compatibility):
+//
+//	{"total": 2, "values": [...], "next": "..."}
+type AutomationRuleSummaryResponse struct {
+	// Newer Cloud shape.
+	Links automationLinks         `json:"links"`
+	Data  []AutomationRuleSummary `json:"data"`
+
+	// Legacy shape.
+	Total  int                     `json:"total"`
+	Values []AutomationRuleSummary `json:"values"`
+	Next   string                  `json:"next,omitempty"`
+}
+
+// Items returns the rule summaries from either the newer Cloud or legacy response shape.
+func (r AutomationRuleSummaryResponse) Items() []AutomationRuleSummary {
+	if len(r.Data) > 0 {
+		return r.Data
+	}
+	return r.Values
+}
+
+// NextURL returns the URL for the next page of results, if available.
+func (r AutomationRuleSummaryResponse) NextURL() string {
+	if r.Links.Next != nil {
+		return *r.Links.Next
+	}
+	return r.Next
+}
+
+// AutomationStateUpdate represents a request to enable or disable a rule.
+// The Automation REST API expects {"value": "ENABLED"} or {"value": "DISABLED"}.
+type AutomationStateUpdate struct {
+	Value string `json:"value"`
+}

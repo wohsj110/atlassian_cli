@@ -1,0 +1,784 @@
+# Integration Tests
+
+This document catalogs the manual integration test suite for `atk-cfl`. These tests verify real-world behavior against a live Confluence instance and catch edge cases that are difficult to cover with unit tests.
+
+> **#392 update:** Rows that exercise `-o json` / `--output json` on resource commands are obsolete — the resource JSON surface has been removed. They now error at the root with `invalid output format: "json" (valid formats: table, plain)`. Skip those rows. The surviving JSON surface is `atk-cfl set-credential --json` (control-plane envelope per cli-common §1.5.2); test that one normally.
+
+## Auth Methods
+
+atk-cfl supports two authentication methods. The full integration test suite should be run with both:
+
+- **Basic Auth** (default): Classic API tokens using `email:token` against the instance URL.
+- **Bearer Auth**: Scoped API tokens for service accounts using `Authorization: Bearer <token>` against the `api.atlassian.com` gateway.
+
+All atk-cfl commands should work with both auth methods (no scope limitations for Confluence).
+
+---
+
+## Test Environment Setup
+
+### Prerequisites
+- A configured `atk-cfl` instance (`atk-cfl init` completed)
+- Access to a test space (e.g., `confluence`)
+- Permission to create, edit, and delete pages/attachments
+
+### Bearer Auth Prerequisites
+- An Atlassian service account with a scoped API token
+- Your Cloud ID (find at `https://your-site.atlassian.net/_edge/tenant_info`)
+- `atk-cfl init --auth-method bearer` completed
+
+### Test Data Conventions
+- Test pages use `[Test]` prefix: `[Test] My Page`
+- Baseline pages (for comparison) use `[Baseline]` prefix
+- Always clean up test data after tests complete
+
+---
+
+## Init
+
+| Test Case | Command | Expected Result |
+|-----------|---------|-----------------|
+| Fresh init | `atk-cfl init` (interactive) | Creates OS-native atlassian-agent-cli/config.yml with URL, email, token |
+| Init with existing config | `atk-cfl init` when config exists | Prompts to overwrite or skip |
+| Verify connection | After init, run `atk-cfl space list` | Connection works, spaces listed |
+| Invalid credentials | Init with bad API token | Error during verification step |
+| Invalid URL | Init with malformed URL | Error: invalid URL format |
+
+### Bearer Auth Init
+
+| Test Case | Command | Expected Result |
+|-----------|---------|-----------------|
+| Bearer init (interactive) | `atk-cfl init --auth-method bearer` | Prompts for URL, API token, Cloud ID. Skips email prompt. Tests connection via gateway. |
+| Bearer init (non-interactive) | `atk-cfl init --auth-method bearer --url URL --token TOKEN --cloud-id ID --no-verify` | Non-interactive setup completes without prompts |
+| Config show (after bearer init) | `atk-cfl config show` | Shows Auth Method = bearer, Cloud ID = value, Email = not set |
+| Config test (after bearer init) | `atk-cfl config test` | Connection verified via gateway URL |
+
+---
+
+## Page Operations
+
+### page list
+
+| Test Case | Command | Expected Result |
+|-----------|---------|-----------------|
+| List pages in space | `atk-cfl page list --space confluence` | Shows table of pages with ID, title, status, version |
+| List with limit | `atk-cfl page list --space confluence --limit 5` | Shows only 5 pages with "showing first N results" message |
+| ~~JSON output~~ (#392 removed) | `atk-cfl page list --space confluence --output json` | Errors: invalid output format |
+| Plain output | `atk-cfl page list --space confluence --output plain` | Tab-separated values |
+| List trashed pages | `atk-cfl page list --space confluence --status trashed` | Shows deleted pages |
+| List archived pages | `atk-cfl page list --space confluence --status archived` | Shows archived pages |
+| Invalid status (draft) | `atk-cfl page list --space confluence --status draft` | Error: API rejects draft status |
+
+### page view
+
+| Test Case | Command | Expected Result |
+|-----------|---------|-----------------|
+| View page content | `atk-cfl page view <page-id>` | Shows title, ID, version, and markdown content |
+| View raw HTML | `atk-cfl page view <page-id> --raw` | Shows Confluence storage format (XHTML) |
+| ~~JSON output~~ (#392 removed) | `atk-cfl page view <page-id> --output json` | Errors: invalid output format |
+| Non-existent page | `atk-cfl page view 99999999999` | Error: 404 not found |
+| View content only | `atk-cfl page view <id> --content-only` | Markdown only, no Title/ID/Version headers |
+| Content only with raw | `atk-cfl page view <id> --content-only --raw` | XHTML only, no headers |
+| Content only with macros | `atk-cfl page view <id> --content-only --show-macros` | Markdown with [TOC] etc., no headers |
+| Roundtrip macros (content-only) | `atk-cfl page view <id> --show-macros --content-only \| atk-cfl page edit <id> --legacy` | Macros preserved |
+| ~~Content only JSON error~~ (#392 removed; -o json itself errors before --content-only checks) | `atk-cfl page view <id> --content-only -o json` | Errors: invalid output format |
+| Content only web error | `atk-cfl page view <id> --content-only --web` | Error: incompatible flags |
+
+### page create
+
+| Test Case | Command | Expected Result |
+|-----------|---------|-----------------|
+| Create from stdin | `echo "# Test" \| atk-cfl page create -s confluence -t "Test Page"` | Page created, shows ID and URL |
+| Create from file | `atk-cfl page create -s confluence -t "Test" --file content.md` | Page created from file content |
+| Create child page | `atk-cfl page create -s confluence -t "Child" --parent <id>` | Page created with parentId set |
+| Create with XHTML (legacy) | `echo "<p>Test</p>" \| atk-cfl page create -s confluence -t "Test" --no-markdown --legacy` | Page created without markdown conversion |
+| Missing title | `atk-cfl page create -s confluence` | Error: title required |
+| Missing space | `atk-cfl page create -t "Test"` | Error: space required |
+| Duplicate title | Create same title twice | Error: "page already exists with same TITLE" |
+| Very long title (300+ chars) | Create with long title | Error: API rejects (400) |
+| Empty content | `echo "" \| atk-cfl page create -s confluence -t "Empty"` | Error: "page content cannot be empty" |
+| Whitespace-only content | `echo "   " \| atk-cfl page create -s confluence -t "Whitespace"` | Error: "page content cannot be empty" |
+| Create (cloud editor) | `echo "# Test" \| atk-cfl page create -s confluence -t "Test"` | Page uses cloud editor (see verification below) |
+| Create (legacy editor) | `echo "# Test" \| atk-cfl page create -s confluence -t "Test" --legacy` | Page uses legacy editor |
+| Create with code block (cloud) | Create page with fenced code block | Code block preserved as `codeBlock` in ADF |
+
+### page edit
+
+| Test Case | Command | Expected Result |
+|-----------|---------|-----------------|
+| Edit from file | `atk-cfl page edit <id> --file updated.md` | Page updated, version incremented |
+| Edit with --no-markdown (legacy) | `atk-cfl page edit <id> --file content.html --no-markdown --legacy` | Raw XHTML preserved |
+| Edit page with tables (markdown mode) | Edit without --no-markdown | See "Confluence UI-Created Content" section |
+| Edit page with code blocks (UI-created) | Edit without --no-markdown | See "Confluence UI-Created Content" section |
+| Non-existent page | `atk-cfl page edit 99999999999` | Error: 404 not found |
+| Edit (cloud editor) | `atk-cfl page edit <id> --file updated.md` | Page stays in cloud editor format |
+| Edit (legacy editor) | `atk-cfl page edit <id> --file updated.md --legacy` | Page uses legacy storage format |
+| Move to new parent | `atk-cfl page edit <id> --parent <parent-id>` | Page appears under new parent in tree |
+| Move and rename | `atk-cfl page edit <id> --parent <parent-id> --title "New Title"` | Page moved AND renamed |
+| Move with content update | `atk-cfl page edit <id> --parent <parent-id> --file updated.md` | Page moved with new content |
+| Move to invalid parent | `atk-cfl page edit <id> --parent 99999999999` | Error: 404 not found |
+| Move preserves history | Move page, then check version history | Previous versions still visible in UI |
+| Move page (no content change) | `atk-cfl page edit <id> --parent <parent-id>` | Page moved without opening editor, content unchanged |
+| Move and rename (no content change) | `atk-cfl page edit <id> --parent <parent-id> --title "New Title"` | Page moved and renamed without editor |
+| Empty content from stdin | `echo "" \| atk-cfl page edit <id>` | Error: "page content cannot be empty" |
+| Whitespace-only from stdin | `echo "   " \| atk-cfl page edit <id>` | Error: "page content cannot be empty" |
+
+### page copy
+
+| Test Case | Command | Expected Result |
+|-----------|---------|-----------------|
+| Copy with --space | `atk-cfl page copy <id> --title "Copy" --space confluence` | Page copied to same space |
+| Copy without --space | `atk-cfl page copy <id> --title "Copy"` | Page copied (space inferred from source) |
+| Copy to different space | `atk-cfl page copy <id> --title "Copy" --space OTHER` | Page copied to different space |
+| Copy without attachments | `atk-cfl page copy <id> --title "Copy" --no-attachments` | Page copied, attachments excluded |
+| Copy without labels | `atk-cfl page copy <id> --title "Copy" --no-labels` | Page copied, labels excluded |
+| Duplicate title in space | Copy to existing title | Error: duplicate title |
+| Non-existent source | `atk-cfl page copy 99999 --title "Copy" --space confluence` | Error: 404 not found |
+
+### page delete
+
+| Test Case | Command | Expected Result |
+|-----------|---------|-----------------|
+| Delete with confirmation | `atk-cfl page delete <id>` (type "y") | Page deleted after confirmation |
+| Delete cancelled | `atk-cfl page delete <id>` (type "n") | "Deletion cancelled" message |
+| Delete with --force | `atk-cfl page delete <id> --force` | Page deleted without confirmation |
+| Non-existent page | `atk-cfl page delete 99999999999 --force` | Error: 404 not found |
+
+---
+
+## Attachment Operations
+
+### attachment list
+
+| Test Case | Command | Expected Result |
+|-----------|---------|-----------------|
+| List attachments | `atk-cfl attachment list --page <id>` | Table of attachments with ID, title, type, size |
+| No attachments | List on page with none | "No attachments found" |
+| ~~JSON output~~ (#392 removed) | `atk-cfl attachment list --page <id> --output json` | Errors: invalid output format |
+| List unused attachments | `atk-cfl attachment list --page <id> --unused` | Only attachments not referenced in page content |
+| No unused attachments | `--unused` on page using all attachments | "No unused attachments found" |
+
+### attachment upload
+
+| Test Case | Command | Expected Result |
+|-----------|---------|-----------------|
+| Upload text file | `atk-cfl attachment upload --page <id> --file test.txt` | Attachment created, shows ID |
+| Upload with comment | `atk-cfl attachment upload --page <id> --file test.txt --comment "Description"` | Attachment with comment |
+| Upload binary file | `atk-cfl attachment upload --page <id> --file image.png` | Binary file uploaded correctly |
+| Unicode filename | `atk-cfl attachment upload --page <id> --file "tëst-filé.txt"` | Special characters handled |
+| Filename with spaces | `atk-cfl attachment upload --page <id> --file "my file (1).txt"` | Spaces and parens handled |
+| Non-existent page | `atk-cfl attachment upload --page 99999 --file test.txt` | Error: page not found |
+
+### attachment download
+
+| Test Case | Command | Expected Result |
+|-----------|---------|-----------------|
+| Download to current dir | `atk-cfl attachment download <att-id>` | File saved with original filename |
+| Download to specific path | `atk-cfl attachment download <att-id> -O /tmp/output.txt` | File saved to specified path |
+| Verify content integrity | Upload then download, compare | Files match exactly |
+| Non-existent attachment | `atk-cfl attachment download att99999` | Error: attachment not found |
+| File already exists | Download to existing file | Error: "file exists (use --force)" |
+| Overwrite with --force | `atk-cfl attachment download <id> -O existing.txt --force` | File overwritten |
+
+### attachment delete
+
+| Test Case | Command | Expected Result |
+|-----------|---------|-----------------|
+| Delete with confirmation | `atk-cfl attachment delete <id>` (type "y") | Attachment deleted |
+| Delete cancelled | `atk-cfl attachment delete <id>` (type "n") | "Deletion cancelled" |
+| Delete with --force | `atk-cfl attachment delete <id> --force` | Deleted without confirmation |
+| Non-existent attachment | `atk-cfl attachment delete att99999 --force` | Error: 404 not found |
+
+---
+
+## Space Operations
+
+### space list
+
+| Test Case | Command | Expected Result |
+|-----------|---------|-----------------|
+| List all spaces | `atk-cfl space list` | Table of spaces with key, name, type |
+| ~~JSON output~~ (#392 removed) | `atk-cfl space list --output json` | Errors: invalid output format |
+| Limit results | `atk-cfl space list --limit 5` | Shows first 5 spaces |
+
+### space view
+
+| Test Case | Command | Expected Result |
+|-----------|---------|-----------------|
+| View space by key | `atk-cfl space view confluence` | Key-value pairs: KEY, NAME, ID, TYPE, STATUS, DESCRIPTION |
+| ~~JSON output~~ (#392 removed) | `atk-cfl space view confluence -o json` | Errors: invalid output format |
+| Non-existent space | `atk-cfl space view NONEXISTENT` | Error: Space with key 'NONEXISTENT' not found |
+| View personal space | `atk-cfl space view ~accountid` | Shows personal space details (if accessible) |
+| Alias: get | `atk-cfl space get confluence` | Same output as `space view` |
+
+### space create
+
+| Test Case | Command | Expected Result |
+|-----------|---------|-----------------|
+| Create global space | `atk-cfl space create --key INTTEST --name "[Test] Integration" --description "Test space"` | Space created, shows KEY, NAME, URL |
+| ~~Create with JSON output~~ (#392 removed) | `atk-cfl space create --key INTTEST2 --name "[Test] Int2" -o json` | Errors: invalid output format |
+| Missing key flag | `atk-cfl space create --name "Test"` | Error: required flag(s) "key" not set |
+| Missing name flag | `atk-cfl space create --key TST` | Error: required flag(s) "name" not set |
+| Duplicate key | `atk-cfl space create --key INTTEST --name "Duplicate"` (after creating INTTEST) | Error: API rejects duplicate key |
+
+### space update
+
+| Test Case | Command | Expected Result |
+|-----------|---------|-----------------|
+| Update name | `atk-cfl space update INTTEST --name "[Test] Updated Name"` | Shows updated key and name |
+| Update description | `atk-cfl space update INTTEST --description "Updated description"` | Shows updated key and name |
+| Update both | `atk-cfl space update INTTEST --name "[Test] Both" --description "Both updated"` | Both name and description changed |
+| ~~JSON output~~ (#392 removed) | `atk-cfl space update INTTEST --name "[Test] JSON" -o json` | Errors: invalid output format |
+| No flags provided | `atk-cfl space update INTTEST` | Error: at least one of --name or --description required |
+| Non-existent space | `atk-cfl space update NONEXISTENT --name "X"` | Error: not found |
+| Verify update | `atk-cfl space view INTTEST` | Shows new name and description |
+
+### space delete
+
+| Test Case | Command | Expected Result |
+|-----------|---------|-----------------|
+| Delete with confirmation | `atk-cfl space delete INTTEST` (type "y") | Space deleted after confirmation prompt |
+| Delete cancelled | `atk-cfl space delete INTTEST` (type "n") | "Deletion cancelled" message |
+| Delete with --force | `atk-cfl space delete INTTEST --force` | Space deleted without confirmation |
+| ~~JSON output~~ (#392 removed) | `atk-cfl space delete INTTEST --force -o json` | Errors: invalid output format |
+| Non-existent space | `atk-cfl space delete NONEXISTENT --force` | Error: not found |
+
+### Space CRUD End-to-End (sequential)
+
+| Step | Command | Expected Result |
+|------|---------|-----------------|
+| 1. Create | `atk-cfl space create --key INTTEST --name "[Test] Integration" --description "Test space"` | Space created |
+| 2. Verify create | `atk-cfl space view INTTEST` | Shows key=INTTEST, name="[Test] Integration" |
+| 3. Update name | `atk-cfl space update INTTEST --name "[Test] Updated"` | Name updated |
+| 4. Verify update | `atk-cfl space view INTTEST` | Shows new name |
+| 5. Update desc | `atk-cfl space update INTTEST --description "New description"` | Description updated |
+| 6. List includes it | `atk-cfl space list \| grep INTTEST` | Space appears in list (was `-o json \| jq` pre-#392) |
+| 7. Delete | `atk-cfl space delete INTTEST --force` | "Deleted space INTTEST" |
+| 8. Verify gone | `atk-cfl space view INTTEST` | Error: not found |
+
+---
+
+## Search Operations
+
+### search
+
+| Test Case | Command | Expected Result |
+|-----------|---------|-----------------|
+| Full-text search | `atk-cfl search "test"` | Shows matching content with ID, TYPE, SPACE, TITLE |
+| Search in space | `atk-cfl search "content" --space DEV` | Only results from specified space |
+| Filter by type | `atk-cfl search --type page` | Only pages returned |
+| Search by title | `atk-cfl search --title "Test"` | Content with "Test" in title |
+| Search by label | `atk-cfl search --label test-label` | Content with specified label |
+| Combined filters | `atk-cfl search "deploy" --space DEV --type page` | Filtered results |
+| Raw CQL | `atk-cfl search --cql "type=page AND space=DEV"` | CQL executed directly |
+| ~~JSON output~~ (#392 removed) | `atk-cfl search "test" -o json` | Errors: invalid output format |
+| Plain output | `atk-cfl search "test" -o plain` | Tab-separated values |
+| Limit results | `atk-cfl search "test" --limit 5` | Max 5 results |
+| No results | `atk-cfl search "xyznonexistent123"` | "No results found" message |
+| Invalid type | `atk-cfl search --type invalid` | Error: invalid type |
+
+### Search After Create (End-to-End)
+
+| Test Case | Steps | Expected Result |
+|-----------|-------|-----------------|
+| Search finds new page | 1. `echo "# Test" \| atk-cfl page create -s DEV -t "[Test] Searchable"`<br>2. Wait 5-10s for indexing<br>3. `atk-cfl search "[Test] Searchable"` | New page appears in results |
+| Content search | 1. Create page with unique content "xyzUniqueContent789"<br>2. Wait 5-10s<br>3. `atk-cfl search "xyzUniqueContent789"` | Page found by body content |
+
+**Note:** Confluence search indexing has a delay (typically 5-10 seconds). Integration tests should wait before searching for newly created content.
+
+---
+
+## Content Fidelity Tests
+
+These tests verify that content survives round-trip conversions.
+
+### Markdown Round-Trip (CLI-created pages)
+
+Pages created via `atk-cfl` use standard HTML and round-trip correctly:
+
+| Content Type | Create | View | Edit | Result |
+|--------------|--------|------|------|--------|
+| Headers (h1-h6) | Pass | Pass | Pass | Preserved |
+| Bold/italic | Pass | Pass | Pass | Preserved |
+| Bullet lists | Pass | Pass | Pass | Preserved |
+| Numbered lists | Pass | Pass | Pass | Preserved |
+| Code blocks (fenced) | Pass | Pass | Pass | Preserved |
+| Inline code | Pass | Pass | Pass | Preserved |
+| Links | Pass | Pass | Pass | Preserved |
+| Blockquotes | Pass | Pass | Pass | Preserved |
+
+### Confluence UI-Created Content
+
+Pages created in Confluence's web UI use proprietary macros that may not round-trip:
+
+| Content Type | View | Edit | Result |
+|--------------|------|------|--------|
+| Tables | Pass | Pass | Preserved (fixed in #25) |
+| Code blocks (macro) | Pass | Pass | Preserved (fixed in #24) |
+| Info/warning panels | Pass* | Pass* | Preserved with `--show-macros` (fixed in #51) |
+| Expand macros | Pass* | Pass* | Preserved with `--show-macros` (fixed in #51) |
+| TOC macros | Pass* | Pass* | Preserved with `--show-macros` (fixed in #51) |
+
+**Note**: Tables and code blocks work automatically. For macro-heavy pages, use `--show-macros` when viewing to preserve macros as `[TOC]`, `[INFO]...[/INFO]`, etc. during roundtrip editing.
+
+### Wiki Links (Issue #69)
+
+Tests for `[[Page Title]]` internal link syntax. Works in both ADF (default) and legacy (storage) paths.
+
+| Test Case | Command | Expected Result |
+|-----------|---------|-----------------|
+| Create with same-space link | `echo "See [[Getting Started]]." \| atk-cfl page create -s confluence -t "[Test] Wiki Link"` | Page created, link resolves to "Getting Started" page |
+| Create with cross-space link | `echo "See [[DEV:Architecture]]." \| atk-cfl page create -s confluence -t "[Test] Cross Link"` | Page created, link resolves to page in DEV space |
+| Create with legacy + wiki link | `echo "See [[Getting Started]]." \| atk-cfl page create -s confluence -t "[Test] Wiki Legacy" --legacy` | Page created with `<ac:link>` in storage format |
+| View wiki link (default) | `atk-cfl page view <id>` | Link text visible (as plain text or markdown link) |
+| View wiki link (show-macros) | `atk-cfl page view <id> --show-macros` | Shows `[[Page Title]]` syntax |
+| Roundtrip wiki link | `atk-cfl page view <id> --show-macros --content-only \| atk-cfl page edit <id> --legacy` | Wiki link preserved through roundtrip |
+| Multiple wiki links | `echo "[[Page A]] and [[DEV:Page B]]." \| atk-cfl page create ...` | Both links created correctly |
+| Wiki link in heading | `echo "# See [[My Page]]" \| atk-cfl page create ...` | Link works inside heading |
+
+#### Wiki Links in Code Blocks (Issue #130)
+
+Wiki-link syntax inside fenced code blocks and inline code spans should be preserved as literal text, not converted to links.
+
+| Test Case | Command | Expected Result |
+|-----------|---------|-----------------|
+| Fenced code block (ADF) | Create page with `` ``` [[Page Title]] ``` `` | `[[Page Title]]` literal in `codeBlock` ADF node |
+| Fenced code block (legacy) | Same with `--legacy` | `[[Page Title]]` literal inside `<pre><code>` |
+| Inline code (ADF) | Create page with `` `[[Page Title]]` `` | `[[Page Title]]` literal with `code` mark |
+| Inline code (legacy) | Same with `--legacy` | `[[Page Title]]` literal inside `<code>` |
+| Mixed: link outside, literal inside | Create page with `[[Real Link]]` and `` ``` [[Example]] ``` `` | Link converted, code block preserved |
+| Roundtrip code block | `atk-cfl page view <id> --show-macros --content-only \| atk-cfl page edit <id> --legacy` | Code block `[[...]]` stays literal after roundtrip |
+
+**Test file** (`/tmp/wl-code-test.md`):
+~~~markdown
+# Wiki Link Code Block Test
+
+See [[Getting Started]] for details.
+
+```
+Use [[Page Title]] syntax for links.
+```
+
+Also `[[inline example]]` here.
+~~~
+
+**Verification:**
+```bash
+# Check storage format for ac:link
+curl -s -u "$EMAIL:$TOKEN" "$URL/api/v2/pages/<page-id>?body-format=storage" | jq '.body.storage.value'
+# Should contain: <ac:link><ri:page ri:content-title="Page Title" />...
+```
+
+### Macro Roundtrip (Issue #51)
+
+Tests for `--show-macros` roundtrip support. **Fully implemented: TOC, panels, expand, nested macros.**
+
+| Test Case | Command | Expected Result |
+|-----------|---------|-----------------|
+| View TOC with params | `atk-cfl page view <toc-page> --show-macros` | Shows `[TOC maxLevel=3]` with parameters |
+| Roundtrip TOC | `atk-cfl page view <id> --show-macros \| atk-cfl page edit <id>` | TOC macro preserved in page |
+| Create with TOC | `echo "[TOC]\n# H1\n## H2" \| atk-cfl page create -s SPACE -t "TOC Test"` | Page has working TOC |
+| View info panel | `atk-cfl page view <panel-page> --show-macros` | Shows `[INFO]...[/INFO]` |
+| Create with panel | `echo "[WARNING]Be careful[/WARNING]" \| atk-cfl page create ...` | Warning panel in page |
+| Roundtrip panel | Pipe view to edit | Panel preserved with content |
+| View expand | `atk-cfl page view <expand-page> --show-macros` | Shows `[EXPAND]...[/EXPAND]` |
+| Create with expand | Create page with expand syntax | Expand works in Confluence |
+| Nested macros (create) | `echo "[INFO]\n[TOC]\n[/INFO]\n# H1" \| atk-cfl page create ...` | Both INFO and TOC macros in page |
+| Nested macros (view) | `atk-cfl page view <nested-page> --show-macros` | Shows `[INFO]...[TOC]...[/INFO]` |
+| Nested macros (roundtrip) | View nested page, pipe to edit | Both macros preserved with correct params |
+
+**Syntax Reference:**
+- TOC: `[TOC]` or `[TOC maxLevel=3 minLevel=1]`
+- Panels: `[INFO]content[/INFO]`, `[WARNING]`, `[NOTE]`, `[TIP]`
+- Expand: `[EXPAND title="Click me"]content[/EXPAND]`
+- Nested: `[INFO][TOC maxLevel=2][/INFO]` (macros can be nested)
+
+### ADF Macro Conversion (Issue #133)
+
+Tests for bracket macro → ADF conversion. Prior to this fix, `[TOC]` and other bracket macros
+were treated as literal text in the default (ADF) upload path.
+
+| Test Case | Command | Expected Result |
+|-----------|---------|-----------------|
+| TOC via ADF path | `echo "[TOC]\n# H1\n## H2" \| atk-cfl page create -s SPACE -t "TOC ADF Test"` | ADF extension node with `extensionKey: "toc"` |
+| TOC with params (ADF) | `echo "[TOC maxLevel=3]\n# H1" \| atk-cfl page create ...` | Extension node with `macroParams.maxLevel.value: "3"` |
+| TOC in code block (ADF) | Create page with `` ``` [TOC] ``` `` | `[TOC]` as literal text in codeBlock, NOT an extension |
+| Panel via ADF path | `echo "[INFO]\nImportant!\n[/INFO]" \| atk-cfl page create ...` | ADF panel node with `panelType: "info"` |
+| TOC roundtrip (ADF) | Create via ADF → view with `--show-macros` | Shows `[TOC]` in markdown output |
+| TOC renders in Confluence | Open page in browser | Table of contents displayed |
+
+**Verification (ADF structure):**
+```bash
+# Check ADF format for extension node
+curl -s -u "$EMAIL:$TOKEN" "$URL/api/v2/pages/<page-id>?body-format=atlas_doc_format" \
+  | jq '.body.atlas_doc_format.value | fromjson | .content[] | select(.type=="extension")'
+# Should contain: {"type": "extension", "attrs": {"extensionKey": "toc", ...}}
+
+# Check storage format for macro (Confluence converts ADF → XHTML)
+curl -s -u "$EMAIL:$TOKEN" "$URL/api/v2/pages/<page-id>?body-format=storage" \
+  | jq '.body.storage.value'
+# Should contain: <ac:structured-macro ac:name="toc" ...>
+```
+
+**Reference page:** `[Test] NBA Significance Thresholds` (ID: 3406561293, Space: INT) —
+copied from PROD for testing. Has TOC, tables, headings, code formatting, wiki-links.
+
+---
+
+## Cloud Editor vs Legacy Editor
+
+Pages created via `atk-cfl` now use the **cloud editor** format (ADF) by default. Use `--legacy` to create pages in the legacy editor format (storage/XHTML).
+
+### Verifying Editor Format
+
+**Visual verification:**
+- Open the page in Confluence web UI
+- Legacy pages show a "Legacy editor" badge in the toolbar
+- Cloud pages have no badge (or show the modern editor)
+
+**API verification:**
+```bash
+# Check editor property via v1 API
+curl -s -u "$EMAIL:$TOKEN" "$URL/rest/api/content/<page-id>?expand=metadata.properties.editor"
+
+# Cloud editor: editor property is null/absent
+# Legacy editor: editor.value = "v1"
+```
+
+**ADF structure verification:**
+```bash
+# Read page as ADF format
+curl -s -u "$EMAIL:$TOKEN" "$URL/api/v2/pages/<page-id>?body-format=atlas_doc_format" | jq '.body.atlas_doc_format.value'
+
+# Cloud pages have proper ADF structure:
+# {"type":"doc","version":1,"content":[...]}
+
+# Check code blocks are proper codeBlock nodes (not paragraphs with code marks)
+# Proper: {"type":"codeBlock","attrs":{"language":"go"},"content":[...]}
+# Wrong: {"type":"paragraph","content":[{"type":"text","marks":[{"type":"code"}],...}]}
+```
+
+### Cloud Editor Test Matrix
+
+| Test ID | Input | Flags | Expected Format | Verification |
+|---------|-------|-------|-----------------|--------------|
+| CE-01 | stdin | (none) | ADF | `body.atlas_doc_format` present |
+| CE-02 | stdin | --legacy | storage | `body.storage` present |
+| CE-03 | file.md | (none) | ADF | No "Legacy editor" badge |
+| CE-04 | file.md | --legacy | storage | Shows "Legacy editor" badge |
+| CE-05 | file.html | --legacy | storage | Raw HTML passed through |
+| CE-06 | stdin | --no-markdown | ADF | Raw content passed through |
+| CE-07 | stdin | --no-markdown --legacy | storage | Raw XHTML passed through |
+
+### Round-Trip Tests
+
+| Test ID | Create Format | Edit Format | Expected Result | Notes |
+|---------|---------------|-------------|-----------------|-------|
+| RT-01 | ADF (default) | ADF (default) | ADF preserved | Happy path |
+| RT-02 | --legacy | --legacy | Storage preserved | Legacy happy path |
+| RT-03 | ADF (default) | --legacy | Warning shown, storage used | May switch editor |
+| RT-04 | --legacy | ADF (default) | ADF used | Page stays legacy until manually converted |
+
+### Test Cases
+
+| Test Case | Steps | Expected Result |
+|-----------|-------|-----------------|
+| Create page (default) | 1. `echo "# Test" \| atk-cfl page create -s confluence -t "[Test] Cloud"`<br>2. Open in browser | No "Legacy editor" badge |
+| Create page (--legacy) | 1. `echo "# Test" \| atk-cfl page create -s confluence -t "[Test] Legacy" --legacy`<br>2. Open in browser | Shows "Legacy editor" badge |
+| Code block preservation | 1. Create page with fenced code block<br>2. Read as ADF via API | Has `codeBlock` node with language attr |
+| Edit maintains format | 1. Create cloud page<br>2. `atk-cfl page edit <id> --file updated.md`<br>3. View in browser | Still cloud editor |
+| Edit with --legacy warning | 1. Create cloud page<br>2. `atk-cfl page edit <id> --file updated.md --legacy` | Warning message shown |
+| Complex markdown (ADF) | 1. Create page with tables, code blocks, nested lists<br>2. Read as ADF | All elements preserved as proper ADF nodes |
+
+### Known Behavior
+
+- **Default (cloud editor)**: Markdown converted to ADF JSON, code blocks properly preserved
+- **--legacy flag**: Markdown converted to XHTML storage format, warning shown on edit
+- **Storage→ADF conversion**: Confluence's built-in conversion loses code block structure (converts to paragraph with code mark)
+- **Recommendation**: Use default (cloud editor) for new pages, use `--legacy` only for compatibility with existing legacy pages
+
+---
+
+## ADF / Cloud Editor Body Fallback (Issue #150)
+
+Pages created with Confluence's cloud editor use ADF internally. Most of these pages return valid XHTML when requested with `body-format=storage` (the API converts ADF→XHTML server-side). However, in rare cases the server-side conversion fails silently, returning an empty `storage.value`. The fix implements a fallback: if storage body is empty, retry with `body-format=atlas_doc_format` and convert the ADF to markdown using `pkg/md.FromADF()`.
+
+**Note:** During diagnostic experiments (Feb 2026), 6 of 7 test pages returned valid storage content. Only page 3390537731 (BAI) had empty storage, and its ADF was also essentially empty. The fallback is defense-in-depth for edge cases.
+
+### Test Case Pages
+
+Copies in the TEST space (originals from INT, CUS, PROD, PLAYBOOK):
+
+| Page ID | Title | Storage? | ADF? |
+|---------|-------|----------|------|
+| 3411542018 | [Test #150] Central Bank (MO) BAI | Yes (5235) | Yes (13744) |
+| 3411312646 | [Test #150] BAI | No (0) | Minimal (59) |
+| 3411378178 | [Test #150] CFG bank txn proposal | Yes (11151) | Yes (25572) |
+| 3411509253 | [Test #150] Identity and metadata exchange | Yes (7082) | Yes (10858) |
+| 3411476495 | [Test #150] Business Profile Setup - CLI Path | Yes (6672) | Yes (11532) |
+| 3411542033 | [Test #150] Positive pay onboarding - b1bank | Yes (3656) | Yes (6788) |
+| 3410952195 | [Test #150] Onboarding CheckSync + MoniCore | Yes (8442) | Yes (15513) |
+
+### Diagnostic Experiments
+
+| Experiment | Command | Expected Result |
+|-----------|---------|-----------------|
+| Storage for ADF page | `curl -s -u "$EMAIL:$TOKEN" "$URL/api/v2/pages/<id>?body-format=storage" \| jq '.body'` | Usually returns XHTML in `storage.value`; may be empty for some ADF-native pages |
+| ADF for ADF page | `curl -s -u "$EMAIL:$TOKEN" "$URL/api/v2/pages/<id>?body-format=atlas_doc_format" \| jq '.body'` | Returns ADF JSON in `atlas_doc_format.value` |
+| No body-format | `curl -s -u "$EMAIL:$TOKEN" "$URL/api/v2/pages/<id>" \| jq '.body'` | Returns `{}` (no body without explicit format) |
+
+### View Tests
+
+| Test Case | Command | Expected Result |
+|-----------|---------|-----------------|
+| View ADF page (default) | `atk-cfl page view <adf-id>` | Shows markdown content (not "(No content)") |
+| View ADF page (raw) | `atk-cfl page view <adf-id> --raw` | Shows raw XHTML (or ADF JSON if storage was empty) |
+| ~~View ADF page (JSON)~~ (#392 removed) | `atk-cfl page view <adf-id> -o json` | Errors: invalid output format |
+| View ADF page (content-only) | `atk-cfl page view <adf-id> --content-only` | Shows content without headers |
+| View legacy page (no regression) | `atk-cfl page view <legacy-id>` | Shows markdown content via storage path |
+
+### Edit Tests
+
+| Test Case | Command | Expected Result |
+|-----------|---------|-----------------|
+| Edit ADF page (title only) | `atk-cfl page edit <adf-id> --title "New Title"` | Title updated, ADF body preserved |
+| Edit ADF page (from file) | `atk-cfl page edit <test-copy-id> --file content.md` | Content updated via ADF |
+| Edit ADF page (stdin) | `echo "# Updated" \| atk-cfl page edit <test-copy-id>` | Content updated via ADF |
+| Edit legacy page (no regression) | `atk-cfl page edit <legacy-id> --file content.md` | No regression |
+
+### Roundtrip Tests
+
+| Test Case | Steps | Expected Result |
+|-----------|-------|-----------------|
+| View then edit ADF page | 1. `atk-cfl page view <id> --content-only > /tmp/out.md`<br>2. `cat /tmp/out.md \| atk-cfl page edit <id>` | Content preserved |
+
+---
+
+## Edge Cases & Error Handling
+
+### Unicode & Special Characters
+
+| Test Case | Expected Result |
+|-----------|-----------------|
+| Unicode in page title | `[Test] Spëcial Chàracters 中文` works |
+| Unicode in page content | Emojis, CJK characters preserved |
+| Unicode in attachment filename | Handled correctly |
+| Special chars: `& < > "` | Properly escaped |
+
+### Error Messages
+
+| Scenario | Expected Error |
+|----------|----------------|
+| Invalid page ID | "API error (status 404): Page not found" |
+| Invalid space key | "API error (status 404): Space not found" |
+| Permission denied | "API error (status 403): ..." |
+| Network timeout | "context deadline exceeded" or similar |
+| Invalid credentials | "API error (status 401): ..." |
+
+### Output Formats
+
+| Format | Flag | Verified With |
+|--------|------|---------------|
+| Table (default) | (none) | Visual inspection |
+| ~~JSON~~ (#392 removed) | `--output json` | errors at root |
+| Plain | `--output plain` | Tab-separated, scriptable |
+
+---
+
+## Test Execution Checklist
+
+All atk-cfl commands work with both auth methods (no scope restrictions for Confluence). Run the full checklist twice with separate passes to ensure both auth paths work.
+
+### Pass 1: Basic Auth
+
+#### Setup (Basic Auth)
+- [ ] Build latest: `make build`
+- [ ] `atk-cfl init` (Basic Auth)
+- [ ] Verify config: `atk-cfl space list` works
+
+#### Page CRUD
+- [ ] Create page from stdin (cloud editor)
+- [ ] Create page with code block (verify ADF codeBlock)
+- [ ] Create page from file
+- [ ] Create page with --legacy flag
+- [ ] Create child page
+- [ ] View page (markdown)
+- [ ] View page (raw)
+- [ ] View page (content-only)
+- [ ] View page (content-only with --show-macros for roundtrip)
+- [ ] Roundtrip macro page via pipe (`view --show-macros --content-only | edit --legacy`)
+- [ ] Edit page from file
+- [ ] Edit page with --legacy flag
+- [ ] Move page to new parent (`--parent` flag)
+- [ ] Move page (no content change, no editor opened)
+- [ ] Move and rename page together
+- [ ] Move and rename (no content change, no editor opened)
+- [ ] Verify page history preserved after move
+- [ ] Copy page (same space)
+- [ ] Copy page (different space)
+- [ ] Delete page (with confirmation)
+- [ ] Delete page (--force)
+
+#### ADF Body Fallback (#150)
+- [ ] View ADF page with empty storage → content displayed via ADF fallback
+- [ ] View ADF page (raw) → shows ADF JSON
+- [ ] ~~View ADF page (JSON output)~~ (#392 removed)
+- [ ] Edit ADF page (title only) → ADF body preserved
+- [ ] Edit ADF page (new content) → submitted as ADF
+- [ ] View/edit legacy page → no regression (storage path used)
+
+#### Wiki Links
+- [ ] Create page with same-space wiki link
+- [ ] Create page with cross-space wiki link
+- [ ] Create with wiki link + legacy flag
+- [ ] View wiki link with --show-macros
+- [ ] Roundtrip wiki link (view --show-macros | edit --legacy)
+- [ ] Wiki link in fenced code block preserved as literal (ADF + legacy)
+- [ ] Wiki link in inline code preserved as literal (ADF + legacy)
+- [ ] Roundtrip code block wiki link stays literal
+
+#### Attachment CRUD
+- [ ] Upload attachment
+- [ ] List attachments
+- [ ] Download attachment
+- [ ] Verify downloaded content matches
+- [ ] Delete attachment
+
+#### Search
+- [ ] Full-text search returns results
+- [ ] Space filter works
+- [ ] Type filter works
+- [ ] ~~JSON output is valid~~ (#392 removed; -o json errors at root)
+- [ ] Raw CQL works
+
+#### Space CRUD
+- [ ] View space (table output)
+- [ ] ~~View space (JSON output)~~ (#392 removed)
+- [ ] View non-existent space (expect error)
+- [ ] Create space with key, name, description
+- [ ] ~~Create space (JSON output)~~ (#392 removed)
+- [ ] Create duplicate key (expect error)
+- [ ] Update space name
+- [ ] Update space description
+- [ ] Update with no flags (expect error)
+- [ ] Delete space (with confirmation, type "y")
+- [ ] Delete space (with confirmation, type "n" — cancelled)
+- [ ] Delete space (--force, no confirmation)
+- [ ] End-to-end lifecycle: create → view → update → delete → verify gone
+
+#### Edge Cases
+- [ ] Unicode in titles/content
+- [ ] Empty content
+- [ ] Very long title (expect rejection)
+- [ ] Duplicate title (expect rejection)
+- [ ] Non-existent resources (expect 404)
+
+#### Cleanup (Basic Auth)
+- [ ] Delete all [Test] prefixed pages
+- [ ] `atk-cfl space delete INTTEST --force`
+- [ ] `atk-cfl space delete INTTEST2 --force`
+- [ ] Verify no test data remains
+
+---
+
+### Pass 2: Bearer Auth
+
+#### Setup (Bearer Auth)
+- [ ] `atk-cfl init --auth-method bearer`
+- [ ] `atk-cfl config show` — auth_method = bearer, cloud_id displayed
+- [ ] `atk-cfl config test` — Connection verified via gateway
+- [ ] `atk-cfl space list` works
+
+#### Page CRUD
+- [ ] Create page from stdin (cloud editor)
+- [ ] Create page with code block (verify ADF codeBlock)
+- [ ] Create page from file
+- [ ] Create page with --legacy flag
+- [ ] Create child page
+- [ ] View page (markdown)
+- [ ] View page (raw)
+- [ ] View page (content-only)
+- [ ] View page (content-only with --show-macros for roundtrip)
+- [ ] Roundtrip macro page via pipe (`view --show-macros --content-only | edit --legacy`)
+- [ ] Edit page from file
+- [ ] Edit page with --legacy flag
+- [ ] Move page to new parent (`--parent` flag)
+- [ ] Move page (no content change, no editor opened)
+- [ ] Move and rename page together
+- [ ] Move and rename (no content change, no editor opened)
+- [ ] Verify page history preserved after move
+- [ ] Copy page (same space)
+- [ ] Copy page (different space)
+- [ ] Delete page (with confirmation)
+- [ ] Delete page (--force)
+
+#### ADF Body Fallback (#150)
+- [ ] View ADF page with empty storage → content displayed via ADF fallback
+- [ ] View ADF page (raw) → shows ADF JSON
+- [ ] ~~View ADF page (JSON output)~~ (#392 removed)
+- [ ] Edit ADF page (title only) → ADF body preserved
+- [ ] Edit ADF page (new content) → submitted as ADF
+- [ ] View/edit legacy page → no regression (storage path used)
+
+#### Wiki Links
+- [ ] Create page with same-space wiki link
+- [ ] Create page with cross-space wiki link
+- [ ] Create with wiki link + legacy flag
+- [ ] View wiki link with --show-macros
+- [ ] Roundtrip wiki link (view --show-macros | edit --legacy)
+- [ ] Wiki link in fenced code block preserved as literal (ADF + legacy)
+- [ ] Wiki link in inline code preserved as literal (ADF + legacy)
+- [ ] Roundtrip code block wiki link stays literal
+
+#### Attachment CRUD
+- [ ] Upload attachment
+- [ ] List attachments
+- [ ] Download attachment
+- [ ] Verify downloaded content matches
+- [ ] Delete attachment
+
+#### Search
+- [ ] Full-text search returns results
+- [ ] Space filter works
+- [ ] Type filter works
+- [ ] ~~JSON output is valid~~ (#392 removed; -o json errors at root)
+- [ ] Raw CQL works
+
+#### Space CRUD
+- [ ] View space (table output)
+- [ ] ~~View space (JSON output)~~ (#392 removed)
+- [ ] View non-existent space (expect error)
+- [ ] Create space with key, name, description
+- [ ] ~~Create space (JSON output)~~ (#392 removed)
+- [ ] Create duplicate key (expect error)
+- [ ] Update space name
+- [ ] Update space description
+- [ ] Update with no flags (expect error)
+- [ ] Delete space (with confirmation, type "y")
+- [ ] Delete space (with confirmation, type "n" — cancelled)
+- [ ] Delete space (--force, no confirmation)
+- [ ] End-to-end lifecycle: create → view → update → delete → verify gone
+
+#### Edge Cases
+- [ ] Unicode in titles/content
+- [ ] Empty content
+- [ ] Very long title (expect rejection)
+- [ ] Duplicate title (expect rejection)
+- [ ] Non-existent resources (expect 404)
+
+#### Cleanup (Bearer Auth)
+- [ ] Delete all [Test] prefixed pages
+- [ ] `atk-cfl space delete INTTEST --force`
+- [ ] `atk-cfl space delete INTTEST2 --force`
+- [ ] Verify no test data remains
+
+---
+
+## Adding New Tests
+
+When adding new features or fixing bugs:
+
+1. Add test cases to the appropriate section above
+2. Include both happy path and error cases
+3. Document any known limitations or edge cases
+4. Update the "Test Execution Checklist" if needed

@@ -1,0 +1,584 @@
+package issues
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/wohsj110/atlassian_cli/shared/testutil"
+
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/api"
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/internal/cache"
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/internal/cmd/root"
+)
+
+func TestNewGetCmd(t *testing.T) {
+	t.Parallel()
+	opts := &root.Options{}
+	cmd := newGetCmd(opts)
+
+	testutil.Equal(t, cmd.Use, "get <issue-key> [issue-key...]")
+	testutil.Equal(t, cmd.Short, "Get issue details")
+
+	// Check that no-truncate flag exists
+	noTruncateFlag := cmd.Flags().Lookup("no-truncate")
+	testutil.NotNil(t, noTruncateFlag)
+	testutil.Equal(t, noTruncateFlag.DefValue, "false")
+}
+
+func newTestIssueServer(_ *testing.T, issue api.Issue) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(issue)
+	}))
+}
+
+func TestRunGet_TruncatesDescription(t *testing.T) {
+	t.Parallel()
+	longText := strings.Repeat("A", 300)
+	issue := api.Issue{
+		Key: "TEST-1",
+		Fields: api.IssueFields{
+			Summary:     "Test issue",
+			Description: &api.Description{Text: longText},
+			Status:      &api.Status{Name: "Open"},
+			IssueType:   &api.IssueType{Name: "Task"},
+		},
+	}
+
+	server := newTestIssueServer(t, issue)
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{
+		URL:      server.URL,
+		Email:    "test@example.com",
+		APIToken: "token",
+	})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{
+		Stdout: &stdout,
+		Stderr: &bytes.Buffer{},
+	}
+	opts.SetAPIClient(client)
+
+	err = runGet(context.Background(), opts, "TEST-1", false, "", false)
+	testutil.RequireNoError(t, err)
+
+	output := stdout.String()
+	testutil.Contains(t, output, "TEST-1")
+	testutil.Contains(t, output, "[truncated — use --fulltext for complete body]")
+	testutil.NotContains(t, output, longText)
+}
+
+func TestRunGet_FullDescription(t *testing.T) {
+	t.Parallel()
+	longText := strings.Repeat("A", 300)
+	issue := api.Issue{
+		Key: "TEST-1",
+		Fields: api.IssueFields{
+			Summary:     "Test issue",
+			Description: &api.Description{Text: longText},
+			Status:      &api.Status{Name: "Open"},
+			IssueType:   &api.IssueType{Name: "Task"},
+		},
+	}
+
+	server := newTestIssueServer(t, issue)
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{
+		URL:      server.URL,
+		Email:    "test@example.com",
+		APIToken: "token",
+	})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{
+		Stdout: &stdout,
+		Stderr: &bytes.Buffer{},
+	}
+	opts.SetAPIClient(client)
+
+	err = runGet(context.Background(), opts, "TEST-1", true, "", false)
+	testutil.RequireNoError(t, err)
+
+	output := stdout.String()
+	testutil.Contains(t, output, longText)
+	testutil.NotContains(t, output, "[truncated")
+}
+
+// TestNewGetCmd_FullTextRoutesFromRoot verifies that when --fulltext is set on
+// the root Options (as the persistent --fulltext flag does), runGet is invoked
+// with noTruncate=true even though the local --no-truncate flag is not set.
+func TestNewGetCmd_FullTextRoutesFromRoot(t *testing.T) {
+	t.Parallel()
+	longText := strings.Repeat("A", 300)
+	issue := api.Issue{
+		Key: "TEST-1",
+		Fields: api.IssueFields{
+			Summary:     "Test issue",
+			Description: &api.Description{Text: longText},
+			Status:      &api.Status{Name: "Open"},
+			IssueType:   &api.IssueType{Name: "Task"},
+		},
+	}
+
+	server := newTestIssueServer(t, issue)
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{
+		URL:      server.URL,
+		Email:    "test@example.com",
+		APIToken: "token",
+	})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{
+		FullText: true, // global --fulltext
+		Stdout:   &stdout,
+		Stderr:   &bytes.Buffer{},
+	}
+	opts.SetAPIClient(client)
+
+	cmd := newGetCmd(opts)
+	cmd.SetArgs([]string{"TEST-1"}) // no --no-truncate locally
+	testutil.RequireNoError(t, cmd.Execute())
+
+	output := stdout.String()
+	testutil.Contains(t, output, longText)
+	testutil.NotContains(t, output, "[truncated")
+}
+
+// TestNewGetCmd_NoTruncateAndFullTextBothSet guards the OR-combined path:
+// both the local --no-truncate flag and the global --fulltext must produce
+// the same result when set together (prevents accidental && regression).
+func TestNewGetCmd_NoTruncateAndFullTextBothSet(t *testing.T) {
+	t.Parallel()
+	longText := strings.Repeat("A", 300)
+	issue := api.Issue{
+		Key: "TEST-1",
+		Fields: api.IssueFields{
+			Summary:     "Test issue",
+			Description: &api.Description{Text: longText},
+			Status:      &api.Status{Name: "Open"},
+			IssueType:   &api.IssueType{Name: "Task"},
+		},
+	}
+
+	server := newTestIssueServer(t, issue)
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{
+		URL:      server.URL,
+		Email:    "test@example.com",
+		APIToken: "token",
+	})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{
+		FullText: true,
+		Stdout:   &stdout,
+		Stderr:   &bytes.Buffer{},
+	}
+	opts.SetAPIClient(client)
+
+	cmd := newGetCmd(opts)
+	cmd.SetArgs([]string{"TEST-1", "--no-truncate"})
+	testutil.RequireNoError(t, cmd.Execute())
+
+	output := stdout.String()
+	testutil.Contains(t, output, longText)
+	testutil.NotContains(t, output, "[truncated")
+}
+
+func TestRunGet_IDOnly(t *testing.T) {
+	t.Parallel()
+	issue := api.Issue{
+		Key: "TEST-1",
+		Fields: api.IssueFields{
+			Summary:   "Test issue",
+			Status:    &api.Status{Name: "Open"},
+			IssueType: &api.IssueType{Name: "Task"},
+		},
+	}
+
+	server := newTestIssueServer(t, issue)
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{URL: server.URL, Email: "test@test.com", APIToken: "token"})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{IDOnly: true, Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(client)
+
+	testutil.RequireNoError(t, runGet(context.Background(), opts, "TEST-1", false, "", false))
+	testutil.Equal(t, stdout.String(), "TEST-1\n")
+}
+
+func TestRunGet_IDOnlyPrecedenceOverExtendedFullText(t *testing.T) {
+	t.Parallel()
+	issue := api.Issue{
+		Key: "TEST-1",
+		Fields: api.IssueFields{
+			Summary:     "Test issue",
+			Description: &api.Description{Text: strings.Repeat("A", 300)},
+			Status:      &api.Status{Name: "Open"},
+			IssueType:   &api.IssueType{Name: "Task"},
+		},
+	}
+
+	server := newTestIssueServer(t, issue)
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{URL: server.URL, Email: "test@test.com", APIToken: "token"})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{IDOnly: true, Extended: true, FullText: true, Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(client)
+
+	// runGet receives noTruncate derived from RunE; when --id is set, the truncation
+	// value doesn't matter because EmitIDOnly collapses output before presenter runs.
+	testutil.RequireNoError(t, runGet(context.Background(), opts, "TEST-1", true, "", false))
+	testutil.Equal(t, stdout.String(), "TEST-1\n")
+}
+
+func TestRunGet_ShortDescriptionNotTruncated(t *testing.T) {
+	t.Parallel()
+	issue := api.Issue{
+		Key: "TEST-1",
+		Fields: api.IssueFields{
+			Summary:     "Test issue",
+			Description: &api.Description{Text: "Short description"},
+			Status:      &api.Status{Name: "Open"},
+			IssueType:   &api.IssueType{Name: "Task"},
+		},
+	}
+
+	server := newTestIssueServer(t, issue)
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{
+		URL:      server.URL,
+		Email:    "test@example.com",
+		APIToken: "token",
+	})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{
+		Stdout: &stdout,
+		Stderr: &bytes.Buffer{},
+	}
+	opts.SetAPIClient(client)
+
+	err = runGet(context.Background(), opts, "TEST-1", false, "", false)
+	testutil.RequireNoError(t, err)
+
+	output := stdout.String()
+	testutil.Contains(t, output, "Short description")
+	testutil.NotContains(t, output, "[truncated")
+}
+
+func TestRunGet_Extended_ShowsNormalizedSections(t *testing.T) {
+	t.Parallel()
+	issue := api.Issue{
+		Key: "TEST-1",
+		Fields: api.IssueFields{
+			Summary:     "Test issue",
+			Status:      &api.Status{Name: "Open", StatusCategory: api.StatusCategory{Name: "To Do"}},
+			IssueType:   &api.IssueType{Name: "Task"},
+			Reporter:    &api.User{DisplayName: "Bob"},
+			Resolution:  &api.Resolution{Name: "Done"},
+			FixVersions: []api.Version{{ID: "1", Name: "v1.0"}},
+			Created:     "2026-04-01T12:00:00.000+0000",
+			Description: &api.Description{Text: strings.Repeat("A", 300)},
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(issue)
+	}))
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{URL: server.URL, Email: "test@test.com", APIToken: "token"})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{Extended: true, Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(client)
+
+	err = runGet(context.Background(), opts, "TEST-1", false, "", false)
+	testutil.RequireNoError(t, err)
+
+	output := stdout.String()
+	testutil.Contains(t, output, "Reporter: Bob")
+	testutil.Contains(t, output, "Fix Versions: v1.0")
+	testutil.Contains(t, output, "Resolution: Done")
+	// Extended implies fulltext — full description present
+	testutil.NotContains(t, output, "[truncated")
+	// Kitchen-sink items no longer present
+	testutil.NotContains(t, output, "Transitions:")
+	testutil.NotContains(t, output, "Watchers:")
+	testutil.NotContains(t, output, "category:")
+}
+
+func TestRunGet_Extended_SprintFromCustomField(t *testing.T) {
+	t.Parallel()
+	issueJSON := `{
+		"key": "MON-4970",
+		"fields": {
+			"summary": "Sprint test issue",
+			"status": {"name": "In Development"},
+			"issuetype": {"name": "Task"},
+			"customfield_10020": [
+				{"id": 100, "name": "Sprint 69", "state": "closed"},
+				{"id": 125, "name": "MON Sprint 70", "state": "active", "startDate": "2026-04-10T00:00:00.000Z", "endDate": "2026-04-24T00:00:00.000Z"}
+			]
+		}
+	}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(issueJSON))
+	}))
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{URL: server.URL, Email: "test@test.com", APIToken: "token"})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{Extended: true, Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(client)
+
+	err = runGet(context.Background(), opts, "MON-4970", false, "", false)
+	testutil.RequireNoError(t, err)
+
+	output := stdout.String()
+	testutil.Contains(t, output, "Sprint: MON Sprint 70 (active)")
+}
+
+func TestRunGet_CustomFields_AppendsSection(t *testing.T) {
+	t.Cleanup(cache.SetRootForTest(t.TempDir()))
+
+	issueJSON := `{
+		"key": "TEST-1",
+		"fields": {
+			"summary": "Test issue",
+			"status": {"name": "Open"},
+			"issuetype": {"name": "Task"},
+			"customfield_10005": {"value": "Bug"}
+		}
+	}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/field") {
+			_ = json.NewEncoder(w).Encode([]api.Field{
+				{ID: "customfield_10005", Name: "Change type", Custom: true, Schema: api.FieldSchema{Type: "option"}},
+			})
+			return
+		}
+		_, _ = w.Write([]byte(issueJSON))
+	}))
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{URL: server.URL, Email: "t@t.com", APIToken: "tok"})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(client)
+
+	err = runGet(context.Background(), opts, "TEST-1", false, "", true)
+	testutil.RequireNoError(t, err)
+
+	output := stdout.String()
+	testutil.Contains(t, output, "Custom Fields:")
+	testutil.Contains(t, output, "Change type: Bug")
+}
+
+func newMultiIssueServer(t *testing.T, issues map[string]api.Issue) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for key, issue := range issues {
+			if strings.Contains(r.URL.Path, "/issue/"+key) {
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(issue)
+				return
+			}
+		}
+		http.NotFound(w, r)
+	}))
+}
+
+func testIssues() map[string]api.Issue {
+	return map[string]api.Issue{
+		"PROJ-1": {
+			Key: "PROJ-1",
+			Fields: api.IssueFields{
+				Summary:   "First issue",
+				Status:    &api.Status{Name: "In Progress"},
+				IssueType: &api.IssueType{Name: "Story"},
+				Assignee:  &api.User{DisplayName: "Alice"},
+			},
+		},
+		"PROJ-2": {
+			Key: "PROJ-2",
+			Fields: api.IssueFields{
+				Summary:   "Second issue",
+				Status:    &api.Status{Name: "Done"},
+				IssueType: &api.IssueType{Name: "Bug"},
+				Assignee:  &api.User{DisplayName: "Bob"},
+			},
+		},
+		"PROJ-3": {
+			Key: "PROJ-3",
+			Fields: api.IssueFields{
+				Summary:   "Third issue",
+				Status:    &api.Status{Name: "Backlog"},
+				IssueType: &api.IssueType{Name: "Task"},
+			},
+		},
+	}
+}
+
+func TestRunGetMulti_Table(t *testing.T) {
+	t.Parallel()
+	issues := testIssues()
+	server := newMultiIssueServer(t, issues)
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{URL: server.URL, Email: "t@t.com", APIToken: "tok"})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(client)
+
+	err = runGetMulti(context.Background(), opts, []string{"PROJ-1", "PROJ-2", "PROJ-3"})
+	testutil.RequireNoError(t, err)
+
+	output := stdout.String()
+	testutil.Contains(t, output, "PROJ-1")
+	testutil.Contains(t, output, "PROJ-2")
+	testutil.Contains(t, output, "PROJ-3")
+	testutil.Contains(t, output, "First issue")
+	testutil.Contains(t, output, "Second issue")
+	testutil.Contains(t, output, "Third issue")
+}
+
+func TestRunGetMulti_PreservesOrder(t *testing.T) {
+	t.Parallel()
+	issues := testIssues()
+	server := newMultiIssueServer(t, issues)
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{URL: server.URL, Email: "t@t.com", APIToken: "tok"})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(client)
+
+	err = runGetMulti(context.Background(), opts, []string{"PROJ-3", "PROJ-1", "PROJ-2"})
+	testutil.RequireNoError(t, err)
+
+	output := stdout.String()
+	pos1 := strings.Index(output, "PROJ-3")
+	pos2 := strings.Index(output, "PROJ-1")
+	pos3 := strings.Index(output, "PROJ-2")
+	if pos1 >= pos2 || pos2 >= pos3 {
+		t.Errorf("order not preserved: PROJ-3 at %d, PROJ-1 at %d, PROJ-2 at %d", pos1, pos2, pos3)
+	}
+}
+
+func TestRunGetMulti_IDOnly(t *testing.T) {
+	t.Parallel()
+	issues := testIssues()
+	server := newMultiIssueServer(t, issues)
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{URL: server.URL, Email: "t@t.com", APIToken: "tok"})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{Stdout: &stdout, Stderr: &bytes.Buffer{}, IDOnly: true}
+	opts.SetAPIClient(client)
+
+	err = runGetMulti(context.Background(), opts, []string{"PROJ-1", "PROJ-2"})
+	testutil.RequireNoError(t, err)
+
+	output := stdout.String()
+	testutil.Contains(t, output, "PROJ-1")
+	testutil.Contains(t, output, "PROJ-2")
+}
+
+func TestRunGetMulti_DefaultOutput(t *testing.T) {
+	t.Parallel()
+	issues := testIssues()
+	server := newMultiIssueServer(t, issues)
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{URL: server.URL, Email: "t@t.com", APIToken: "tok"})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(client)
+
+	err = runGetMulti(context.Background(), opts, []string{"PROJ-1", "PROJ-2"})
+	testutil.RequireNoError(t, err)
+
+	output := stdout.String()
+	testutil.Contains(t, output, "PROJ-1")
+	testutil.Contains(t, output, "PROJ-2")
+}
+
+func TestRunGetMulti_FieldsFlagError(t *testing.T) {
+	t.Parallel()
+	opts := &root.Options{}
+	cmd := newGetCmd(opts)
+
+	cmd.SetArgs([]string{"PROJ-1", "PROJ-2", "--fields", "Status"})
+	err := cmd.Execute()
+	testutil.NotNil(t, err)
+	testutil.Contains(t, err.Error(), "--fields is only supported with a single issue key")
+}
+
+func TestRunGetMulti_CustomFieldsFlagError(t *testing.T) {
+	t.Parallel()
+	opts := &root.Options{}
+	cmd := newGetCmd(opts)
+
+	cmd.SetArgs([]string{"PROJ-1", "PROJ-2", "--custom-fields"})
+	err := cmd.Execute()
+	testutil.NotNil(t, err)
+	testutil.Contains(t, err.Error(), "--custom-fields is only supported with a single issue key")
+}
+
+func TestRunGetMulti_FailsOnBadKey(t *testing.T) {
+	t.Parallel()
+	issues := testIssues()
+	server := newMultiIssueServer(t, issues)
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{URL: server.URL, Email: "t@t.com", APIToken: "tok"})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(client)
+
+	err = runGetMulti(context.Background(), opts, []string{"PROJ-1", "NONEXIST-999"})
+	testutil.NotNil(t, err)
+}

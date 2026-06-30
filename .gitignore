@@ -1,0 +1,21 @@
+# Local build outputs
+/bin/
+/dist/
+
+# Go test and coverage artifacts
+*.test
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+# Local environment and editor files
+.env
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*.tmp
+*.bak
+*~

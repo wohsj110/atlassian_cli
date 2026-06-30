@@ -1,0 +1,69 @@
+package automation
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"github.com/spf13/cobra"
+
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/internal/cmd/root"
+)
+
+func newExportCmd(opts *root.Options) *cobra.Command {
+	var compact bool
+
+	cmd := &cobra.Command{
+		Use:   "export <rule-id>",
+		Short: "Export automation rule as JSON",
+		Long: `Export the full automation rule definition as JSON.
+
+This outputs the exact JSON returned by the API, suitable for editing
+and re-importing via 'atk-jira auto update'. Output is always JSON.
+
+RECOMMENDED WORKFLOW:
+  atk-jira auto export <rule-id> > rule.json
+  # Edit rule.json — only change fields you understand
+  atk-jira auto update <rule-id> --file rule.json`,
+		Example: `  atk-jira automation export 12345
+  atk-jira auto export 12345 > rule.json
+  atk-jira auto export 12345 --compact`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runExport(cmd.Context(), opts, args[0], compact)
+		},
+	}
+
+	cmd.Flags().BoolVar(&compact, "compact", false, "Output minified JSON")
+
+	return cmd
+}
+
+func runExport(ctx context.Context, opts *root.Options, ruleID string, compact bool) error {
+	client, err := opts.APIClient()
+	if err != nil {
+		return err
+	}
+
+	raw, err := client.GetAutomationRuleRaw(ctx, ruleID)
+	if err != nil {
+		return err
+	}
+
+	if compact {
+		_, err = fmt.Fprintln(opts.Stdout, string(raw))
+		return err
+	}
+
+	// Pretty-print the JSON
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, raw, "", "  "); err != nil {
+		// If indenting fails, output raw
+		_, err = fmt.Fprintln(opts.Stdout, string(raw))
+		return err
+	}
+
+	_, err = fmt.Fprintln(opts.Stdout, buf.String())
+	return err
+}

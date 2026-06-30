@@ -1,0 +1,532 @@
+package space
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/wohsj110/atlassian_cli/shared/testutil"
+
+	"github.com/wohsj110/atlassian_cli/tools/atk-cfl/api"
+	"github.com/wohsj110/atlassian_cli/tools/atk-cfl/internal/cmd/root"
+	"github.com/wohsj110/atlassian_cli/tools/atk-cfl/internal/config"
+)
+
+// spaceListResponse returns a v2 list response with a single space.
+const spaceListResponse = `{
+	"results": [{
+		"id": "123456",
+		"key": "TEST",
+		"name": "Test Space",
+		"type": "global",
+		"status": "current",
+		"description": {"plain": {"value": "A test space"}}
+	}]
+}`
+
+// v1SpaceUpdateResponse returns a v1 API space response.
+const v1SpaceUpdateResponse = `{
+	"id": 123456,
+	"key": "TEST",
+	"name": "Updated Name",
+	"type": "global",
+	"description": {"plain": {"value": "Updated description", "representation": "plain"}},
+	"_links": {"webui": "/spaces/TEST"}
+}`
+
+// --- View tests ---
+
+func TestRunView_Table(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		testutil.Equal(t, "GET", r.Method)
+		testutil.Contains(t, r.URL.Path, "/spaces")
+		testutil.Equal(t, "TEST", r.URL.Query().Get("keys"))
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(spaceListResponse))
+	}))
+	defer server.Close()
+
+	stdout := &bytes.Buffer{}
+	rootOpts := &root.Options{
+		Output:  "table",
+		NoColor: true,
+		Stdout:  stdout,
+		Stderr:  &bytes.Buffer{},
+	}
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &viewOptions{Options: rootOpts}
+	err := runView(context.Background(), "TEST", opts)
+
+	testutil.RequireNoError(t, err)
+	testutil.Equal(t, "Key: TEST\nName: Test Space\nID: 123456\nType: global\n", stdout.String())
+}
+
+func TestRunView_FullPlain(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		testutil.Equal(t, "GET", r.Method)
+		testutil.Contains(t, r.URL.Path, "/spaces")
+		testutil.Equal(t, "TEST", r.URL.Query().Get("keys"))
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(spaceListResponse))
+	}))
+	defer server.Close()
+
+	stdout := &bytes.Buffer{}
+	rootOpts := &root.Options{
+		Output:  "plain",
+		NoColor: true,
+		Full:    true,
+		Stdout:  stdout,
+		Stderr:  &bytes.Buffer{},
+	}
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &viewOptions{Options: rootOpts}
+	err := runView(context.Background(), "TEST", opts)
+
+	testutil.RequireNoError(t, err)
+	testutil.Equal(t, "Key: TEST\nName: Test Space\nID: 123456\nType: global\nStatus: current\nDescription: A test space\n", stdout.String())
+}
+
+func TestExecuteView_InvalidOutputFormat(t *testing.T) {
+	t.Parallel()
+
+	rootCmd, rootOpts := root.NewCmd()
+	rootOpts.Output = "invalid"
+	rootOpts.NoColor = true
+	rootOpts.Stdout = &bytes.Buffer{}
+	rootOpts.Stderr = &bytes.Buffer{}
+	Register(rootCmd, rootOpts)
+	rootCmd.SetArgs([]string{"space", "view", "TEST"})
+
+	err := rootCmd.Execute()
+	testutil.RequireError(t, err)
+	testutil.Contains(t, err.Error(), `invalid output format: "invalid"`)
+}
+
+func TestRunView_PreservesRawSpaceType(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		spaceKey  string
+		spaceType string
+	}{
+		{name: "collaboration", spaceKey: "CONFLUENCE", spaceType: "collaboration"},
+		{name: "knowledge base", spaceKey: "Education", spaceType: "knowledge_base"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				testutil.Equal(t, "GET", r.Method)
+				testutil.Equal(t, "/api/v2/spaces", r.URL.Path)
+				testutil.Equal(t, tt.spaceKey, r.URL.Query().Get("keys"))
+				testutil.Equal(t, "1", r.URL.Query().Get("limit"))
+
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{
+					"results": [{
+						"id": "123456",
+						"key": "` + tt.spaceKey + `",
+						"name": "Test Space",
+						"type": "` + tt.spaceType + `",
+						"status": "current"
+					}]
+				}`))
+			}))
+			defer server.Close()
+
+			stdout := &bytes.Buffer{}
+			rootOpts := &root.Options{
+				Output:  "table",
+				NoColor: true,
+				Stdout:  stdout,
+				Stderr:  &bytes.Buffer{},
+			}
+			client := api.NewClient(server.URL, "test@example.com", "token")
+			rootOpts.SetAPIClient(client)
+
+			opts := &viewOptions{Options: rootOpts}
+			err := runView(context.Background(), tt.spaceKey, opts)
+
+			testutil.RequireNoError(t, err)
+			testutil.Contains(t, stdout.String(), "Type: "+tt.spaceType)
+		})
+	}
+}
+
+func TestRunView_NotFound(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results": []}`))
+	}))
+	defer server.Close()
+
+	rootOpts := newTestRootOptions()
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &viewOptions{Options: rootOpts}
+	err := runView(context.Background(), "NONEXISTENT", opts)
+
+	testutil.RequireError(t, err)
+	testutil.Contains(t, err.Error(), "not found")
+}
+
+// --- Create tests ---
+
+func TestRunCreate(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		testutil.Equal(t, "POST", r.Method)
+		testutil.Equal(t, "/rest/api/space", r.URL.Path)
+
+		var req map[string]any
+		err := json.NewDecoder(r.Body).Decode(&req)
+		testutil.RequireNoError(t, err)
+		testutil.Equal(t, "TEST", req["key"])
+		testutil.Equal(t, "Test Space", req["name"])
+		testutil.Equal(t, "global", req["type"])
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{
+			"id": 123456,
+			"key": "TEST",
+			"name": "Test Space",
+			"type": "global",
+			"_links": {"webui": "/spaces/TEST"}
+		}`))
+	}))
+	defer server.Close()
+
+	stdout := &bytes.Buffer{}
+	rootOpts := &root.Options{
+		Output:  "table",
+		NoColor: true,
+		Stdout:  stdout,
+		Stderr:  &bytes.Buffer{},
+	}
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+	rootOpts.SetConfig(&config.Config{URL: "https://example.atlassian.net/wiki"})
+
+	opts := &createOptions{
+		Options:   rootOpts,
+		key:       "TEST",
+		name:      "Test Space",
+		spaceType: "global",
+	}
+
+	err := runCreate(context.Background(), opts)
+
+	testutil.RequireNoError(t, err)
+	testutil.Equal(t, "Created space: Test Space\nKey: TEST\nURL: https://example.atlassian.net/wiki/spaces/TEST\n", stdout.String())
+	testutil.Equal(t, "", rootOpts.Stderr.(*bytes.Buffer).String())
+}
+
+func TestRunCreate_CreateFailed_NoDuplicatePrefix(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message": "Space create failed"}`))
+	}))
+	defer server.Close()
+
+	rootOpts := newTestRootOptions()
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+	rootOpts.SetConfig(&config.Config{URL: "https://example.atlassian.net/wiki"})
+
+	opts := &createOptions{
+		Options:   rootOpts,
+		key:       "TEST",
+		name:      "Test Space",
+		spaceType: "global",
+	}
+
+	err := runCreate(context.Background(), opts)
+	testutil.RequireError(t, err)
+	testutil.Contains(t, err.Error(), "creating space")
+	testutil.NotContains(t, err.Error(), "creating space: creating space:")
+}
+
+func TestRunCreate_WithDescription(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		err := json.NewDecoder(r.Body).Decode(&req)
+		testutil.RequireNoError(t, err)
+		desc := req["description"].(map[string]any)
+		plain := desc["plain"].(map[string]any)
+		testutil.Equal(t, "A test space", plain["value"])
+		testutil.Equal(t, "plain", plain["representation"])
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{
+			"id": 123456,
+			"key": "TEST",
+			"name": "Test Space",
+			"type": "global"
+		}`))
+	}))
+	defer server.Close()
+
+	rootOpts := newTestRootOptions()
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+	rootOpts.SetConfig(&config.Config{URL: "https://example.atlassian.net/wiki"})
+
+	opts := &createOptions{
+		Options:     rootOpts,
+		key:         "TEST",
+		name:        "Test Space",
+		description: "A test space",
+		spaceType:   "global",
+	}
+
+	err := runCreate(context.Background(), opts)
+	testutil.RequireNoError(t, err)
+}
+
+// --- Update tests ---
+
+func TestRunUpdate(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		testutil.Equal(t, "PUT", r.Method)
+		testutil.Equal(t, "/rest/api/space/TEST", r.URL.Path)
+
+		var req api.UpdateSpaceRequest
+		err := json.NewDecoder(r.Body).Decode(&req)
+		testutil.RequireNoError(t, err)
+		testutil.Equal(t, "TEST", req.Key)
+		testutil.Equal(t, "Updated Name", req.Name)
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(v1SpaceUpdateResponse))
+	}))
+	defer server.Close()
+
+	stdout := &bytes.Buffer{}
+	rootOpts := &root.Options{
+		Output:  "table",
+		NoColor: true,
+		Stdout:  stdout,
+		Stderr:  &bytes.Buffer{},
+	}
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &updateOptions{
+		Options: rootOpts,
+		name:    "Updated Name",
+	}
+
+	err := runUpdate(context.Background(), "TEST", opts)
+
+	testutil.RequireNoError(t, err)
+	testutil.Equal(t, "Updated space: Updated Name (TEST)\n", stdout.String())
+	testutil.Equal(t, "", rootOpts.Stderr.(*bytes.Buffer).String())
+}
+
+func TestRunUpdate_NoFlags(t *testing.T) {
+	t.Parallel()
+	rootOpts := newTestRootOptions()
+
+	opts := &updateOptions{
+		Options: rootOpts,
+	}
+
+	err := runUpdate(context.Background(), "TEST", opts)
+
+	testutil.RequireError(t, err)
+	testutil.Contains(t, err.Error(), "at least one of --name or --description is required")
+}
+
+func TestRunUpdate_WithDescription(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req api.UpdateSpaceRequest
+		err := json.NewDecoder(r.Body).Decode(&req)
+		testutil.RequireNoError(t, err)
+		testutil.NotNil(t, req.Description)
+		testutil.Equal(t, "New description", req.Description.Plain.Value)
+		testutil.Equal(t, "plain", req.Description.Plain.Representation)
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(v1SpaceUpdateResponse))
+	}))
+	defer server.Close()
+
+	rootOpts := newTestRootOptions()
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &updateOptions{
+		Options:     rootOpts,
+		description: "New description",
+	}
+
+	err := runUpdate(context.Background(), "TEST", opts)
+	testutil.RequireNoError(t, err)
+}
+
+func TestRunUpdate_UpdateFailed_NoDuplicatePrefix(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"message": "Permission denied"}`))
+	}))
+	defer server.Close()
+
+	rootOpts := newTestRootOptions()
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &updateOptions{
+		Options: rootOpts,
+		name:    "Updated Name",
+	}
+
+	err := runUpdate(context.Background(), "TEST", opts)
+	testutil.RequireError(t, err)
+	testutil.Contains(t, err.Error(), "updating space")
+	testutil.NotContains(t, err.Error(), "updating space: updating space:")
+}
+
+// --- Delete tests ---
+
+func TestRunDelete_Force(t *testing.T) {
+	t.Parallel()
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if callCount == 1 {
+			// GetSpaceByKey call
+			testutil.Equal(t, "GET", r.Method)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(spaceListResponse))
+			return
+		}
+		// DeleteSpace call
+		testutil.Equal(t, "DELETE", r.Method)
+		testutil.Equal(t, "/rest/api/space/TEST", r.URL.Path)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	stdout := &bytes.Buffer{}
+	rootOpts := &root.Options{
+		Output:  "table",
+		NoColor: true,
+		Stdout:  stdout,
+		Stderr:  &bytes.Buffer{},
+	}
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &deleteOptions{
+		Options: rootOpts,
+		force:   true,
+	}
+
+	err := runDelete(context.Background(), "TEST", opts)
+
+	testutil.RequireNoError(t, err)
+	testutil.Equal(t, "Deleted space: Test Space (TEST)\n", stdout.String())
+	testutil.Equal(t, "", rootOpts.Stderr.(*bytes.Buffer).String())
+}
+
+func TestRunDelete_NoForce_Declined(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(spaceListResponse))
+	}))
+	defer server.Close()
+
+	rootOpts := newTestRootOptions()
+	rootOpts.Stdin = strings.NewReader("n\n")
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &deleteOptions{
+		Options: rootOpts,
+		force:   false,
+	}
+
+	err := runDelete(context.Background(), "TEST", opts)
+
+	testutil.RequireNoError(t, err)
+	testutil.Equal(t, "", rootOpts.Stdout.(*bytes.Buffer).String())
+	testutil.Equal(t, "About to delete space: Test Space (TEST)\nAre you sure? [y/N]: Deletion cancelled.\n", rootOpts.Stderr.(*bytes.Buffer).String())
+}
+
+func TestRunDelete_NoForce_Accepted(t *testing.T) {
+	t.Parallel()
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		callCount++
+		if callCount == 1 {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(spaceListResponse))
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	rootOpts := newTestRootOptions()
+	rootOpts.Stdin = strings.NewReader("y\n")
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &deleteOptions{
+		Options: rootOpts,
+		force:   false,
+	}
+
+	err := runDelete(context.Background(), "TEST", opts)
+
+	testutil.RequireNoError(t, err)
+	testutil.Equal(t, 2, callCount)
+	testutil.Equal(t, "Deleted space: Test Space (TEST)\n", rootOpts.Stdout.(*bytes.Buffer).String())
+	testutil.Equal(t, "About to delete space: Test Space (TEST)\nAre you sure? [y/N]: ", rootOpts.Stderr.(*bytes.Buffer).String())
+}
+
+func TestRunDelete_NotFound(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results": []}`))
+	}))
+	defer server.Close()
+
+	rootOpts := newTestRootOptions()
+	client := api.NewClient(server.URL, "test@example.com", "token")
+	rootOpts.SetAPIClient(client)
+
+	opts := &deleteOptions{
+		Options: rootOpts,
+		force:   true,
+	}
+
+	err := runDelete(context.Background(), "NONEXISTENT", opts)
+
+	testutil.RequireError(t, err)
+	testutil.Contains(t, err.Error(), "not found")
+	testutil.NotContains(t, err.Error(), "getting space: getting space")
+}

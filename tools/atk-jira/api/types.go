@@ -1,0 +1,514 @@
+package api //nolint:revive // package name is intentional
+
+import (
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/wohsj110/atlassian_cli/shared/adf"
+)
+
+// Issue represents a Jira issue
+type Issue struct {
+	ID     string      `json:"id"`
+	Key    string      `json:"key"`
+	Self   string      `json:"self"`
+	Fields IssueFields `json:"fields"`
+}
+
+// IssueFields contains the fields of a Jira issue
+type IssueFields struct {
+	Summary     string       `json:"summary"`
+	Description *Description `json:"description,omitempty"`
+	Status      *Status      `json:"status,omitempty"`
+	IssueType   *IssueType   `json:"issuetype,omitempty"`
+	Priority    *Priority    `json:"priority,omitempty"`
+	Assignee    *User        `json:"assignee,omitempty"`
+	Reporter    *User        `json:"reporter,omitempty"`
+	Project     *Project     `json:"project,omitempty"`
+	Created     string       `json:"created,omitempty"`
+	Updated     string       `json:"updated,omitempty"`
+	Labels      []string     `json:"labels,omitempty"`
+	Components  []Component  `json:"components,omitempty"`
+	Sprint      *Sprint      `json:"sprint,omitempty"`
+	Parent      *Issue       `json:"parent,omitempty"`
+	Resolution  *Resolution  `json:"resolution,omitempty"`
+	FixVersions []Version    `json:"fixVersions,omitempty"`
+
+	// CustomFields holds any fields not mapped to struct fields (e.g., customfield_10001)
+	CustomFields map[string]any `json:"-"`
+}
+
+// knownFieldKeys lists JSON keys for typed struct fields
+var knownFieldKeys = map[string]bool{
+	"summary": true, "description": true, "status": true,
+	"issuetype": true, "priority": true, "assignee": true,
+	"reporter": true, "project": true, "created": true,
+	"updated": true, "labels": true, "components": true,
+	"sprint": true, "parent": true, "resolution": true,
+	"fixVersions": true,
+}
+
+// UnmarshalJSON custom unmarshaler to capture custom fields
+func (f *IssueFields) UnmarshalJSON(data []byte) error {
+	// First, unmarshal into a temp struct to get typed fields
+	type Alias IssueFields
+	aux := &struct {
+		*Alias
+	}{
+		Alias: (*Alias)(f),
+	}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return fmt.Errorf("unmarshaling issue fields: %w", err)
+	}
+
+	// Then unmarshal into a map to capture all fields
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("unmarshaling issue fields (raw): %w", err)
+	}
+
+	// Extract custom fields (those not in knownFieldKeys)
+	f.CustomFields = make(map[string]any)
+	for key, value := range raw {
+		if !knownFieldKeys[key] {
+			var v any
+			if err := json.Unmarshal(value, &v); err == nil {
+				f.CustomFields[key] = v
+			}
+		}
+	}
+
+	if f.Sprint == nil {
+		if sprintRaw, ok := raw["customfield_10020"]; ok {
+			f.Sprint = resolveSprintFromCustomField(sprintRaw)
+		}
+	}
+
+	return nil
+}
+
+func resolveSprintFromCustomField(raw json.RawMessage) *Sprint {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var arr []Sprint
+	if err := json.Unmarshal(raw, &arr); err == nil {
+		if len(arr) == 0 {
+			return nil
+		}
+		return &arr[len(arr)-1]
+	}
+	var s Sprint
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return &s
+	}
+	return nil
+}
+
+// MarshalJSON custom marshaler to include custom fields
+func (f IssueFields) MarshalJSON() ([]byte, error) {
+	// Start with typed fields
+	result := make(map[string]any)
+
+	result["summary"] = f.Summary
+	if f.Description != nil {
+		result["description"] = f.Description
+	}
+	if f.Status != nil {
+		result["status"] = f.Status
+	}
+	if f.IssueType != nil {
+		result["issuetype"] = f.IssueType
+	}
+	if f.Priority != nil {
+		result["priority"] = f.Priority
+	}
+	if f.Assignee != nil {
+		result["assignee"] = f.Assignee
+	}
+	if f.Reporter != nil {
+		result["reporter"] = f.Reporter
+	}
+	if f.Project != nil {
+		result["project"] = f.Project
+	}
+	if f.Created != "" {
+		result["created"] = f.Created
+	}
+	if f.Updated != "" {
+		result["updated"] = f.Updated
+	}
+	if len(f.Labels) > 0 {
+		result["labels"] = f.Labels
+	}
+	if len(f.Components) > 0 {
+		result["components"] = f.Components
+	}
+	if f.Sprint != nil {
+		result["sprint"] = f.Sprint
+	}
+	if f.Parent != nil {
+		result["parent"] = f.Parent
+	}
+	if f.Resolution != nil {
+		result["resolution"] = f.Resolution
+	}
+	if len(f.FixVersions) > 0 {
+		result["fixVersions"] = f.FixVersions
+	}
+
+	// Add custom fields
+	for key, value := range f.CustomFields {
+		result[key] = value
+	}
+
+	return json.Marshal(result)
+}
+
+// ADFDocument is a type alias for the shared ADF Document type.
+type ADFDocument = adf.Document
+
+// ADFNode is a type alias for the shared ADF Node type.
+type ADFNode = adf.Node
+
+// ADFMark is a type alias for the shared ADF Mark type.
+type ADFMark = adf.Mark
+
+// NewADFDocument creates an ADF document from markdown text.
+// Supports headings, bold, italic, code, code blocks, lists, links, and blockquotes.
+func NewADFDocument(text string) *ADFDocument {
+	return MarkdownToADF(text)
+}
+
+// Description can be either a string (Agile API) or ADF document (REST API v3)
+type Description struct {
+	Text string       // Plain text (from string or extracted from ADF)
+	ADF  *ADFDocument // Original ADF document if available
+}
+
+// UnmarshalJSON handles both string and ADF document formats
+func (d *Description) UnmarshalJSON(data []byte) error {
+	// Try as string first
+	var str string
+	if err := json.Unmarshal(data, &str); err == nil {
+		d.Text = str
+		return nil
+	}
+
+	// Try as ADF document
+	var doc ADFDocument
+	if err := json.Unmarshal(data, &doc); err == nil {
+		d.ADF = &doc
+		d.Text = doc.ToPlainText()
+		return nil
+	}
+
+	// If neither works, just ignore (null or empty)
+	return nil
+}
+
+// MarshalJSON always outputs ADF format for API compatibility
+func (d *Description) MarshalJSON() ([]byte, error) {
+	if d.ADF != nil {
+		return json.Marshal(d.ADF)
+	}
+	if d.Text != "" {
+		return json.Marshal(NewADFDocument(d.Text))
+	}
+	return []byte("null"), nil
+}
+
+// ToPlainText returns the plain text content
+func (d *Description) ToPlainText() string {
+	if d == nil {
+		return ""
+	}
+	return d.Text
+}
+
+// Status represents an issue status
+type Status struct {
+	ID             string         `json:"id"`
+	Name           string         `json:"name"`
+	Description    string         `json:"description,omitempty"`
+	StatusCategory StatusCategory `json:"statusCategory,omitempty"`
+}
+
+// StatusCategory represents a status category
+type StatusCategory struct {
+	ID   int    `json:"id"`
+	Key  string `json:"key"`
+	Name string `json:"name"`
+}
+
+// IssueType represents an issue type
+type IssueType struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Subtask     bool   `json:"subtask"`
+}
+
+// Priority represents an issue priority
+type Priority struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// Resolution represents a workflow resolution value
+type Resolution struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// User represents a Jira user
+type User struct {
+	AccountID        string            `json:"accountId"`
+	AccountType      string            `json:"accountType,omitempty"`
+	DisplayName      string            `json:"displayName"`
+	EmailAddress     string            `json:"emailAddress,omitempty"`
+	Active           bool              `json:"active"`
+	AvatarURLs       map[string]string `json:"avatarUrls,omitempty"`
+	TimeZone         string            `json:"timeZone,omitempty"`
+	Locale           string            `json:"locale,omitempty"`
+	Groups           *UserCountBlock   `json:"groups,omitempty"`
+	ApplicationRoles *UserCountBlock   `json:"applicationRoles,omitempty"`
+}
+
+// UserCountBlock is a small envelope Jira uses when returning count-bearing
+// expandable user fields such as groups and applicationRoles. Pointer-nullable
+// on User so presenters can distinguish "API omitted the block" from "present
+// with zero items".
+type UserCountBlock struct {
+	Size int `json:"size"`
+}
+
+// Project represents a Jira project
+type Project struct {
+	ID         string            `json:"id"`
+	Key        string            `json:"key"`
+	Name       string            `json:"name"`
+	AvatarURLs map[string]string `json:"avatarUrls,omitempty"`
+}
+
+// Component represents a project component
+type Component struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// Sprint represents an agile sprint
+type Sprint struct {
+	ID            int        `json:"id"`
+	Name          string     `json:"name"`
+	State         string     `json:"state"`
+	StartDate     *time.Time `json:"startDate,omitempty"`
+	EndDate       *time.Time `json:"endDate,omitempty"`
+	CompleteDate  *time.Time `json:"completeDate,omitempty"`
+	OriginBoardID int        `json:"originBoardId,omitempty"`
+	Goal          string     `json:"goal,omitempty"`
+}
+
+// Board represents an agile board
+type Board struct {
+	ID       int           `json:"id"`
+	Name     string        `json:"name"`
+	Type     string        `json:"type"`
+	Location BoardLocation `json:"location,omitempty"`
+}
+
+// BoardLocation contains project info for a board
+type BoardLocation struct {
+	ProjectID   int    `json:"projectId"`
+	ProjectKey  string `json:"projectKey"`
+	ProjectName string `json:"projectName"`
+}
+
+// BoardConfiguration represents the configuration of an agile board,
+// including its filter and column layout.
+type BoardConfiguration struct {
+	ID           int               `json:"id"`
+	Name         string            `json:"name"`
+	Filter       BoardFilter       `json:"filter"`
+	ColumnConfig BoardColumnConfig `json:"columnConfig"`
+}
+
+// BoardFilter identifies the JQL filter backing a board.
+type BoardFilter struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// BoardColumnConfig holds the column layout for a board.
+type BoardColumnConfig struct {
+	Columns []BoardColumn `json:"columns"`
+}
+
+// BoardColumn represents a single column in a board's layout.
+type BoardColumn struct {
+	Name string `json:"name"`
+}
+
+// Transition represents a workflow transition
+type Transition struct {
+	ID            string                     `json:"id"`
+	Name          string                     `json:"name"`
+	HasScreen     bool                       `json:"hasScreen"`
+	IsConditional bool                       `json:"isConditional"`
+	To            Status                     `json:"to"`
+	Fields        map[string]TransitionField `json:"fields,omitempty"`
+}
+
+// TransitionField represents field metadata for a transition
+type TransitionField struct {
+	Required      bool          `json:"required"`
+	Name          string        `json:"name"`
+	Schema        FieldSchema   `json:"schema,omitempty"`
+	AllowedValues []FieldOption `json:"allowedValues,omitempty"`
+}
+
+// FieldOption represents an allowed value for a field
+type FieldOption struct {
+	ID    string `json:"id,omitempty"`
+	Name  string `json:"name,omitempty"`
+	Value string `json:"value,omitempty"`
+}
+
+// CommentVisibility represents the visibility restriction on a comment.
+type CommentVisibility struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
+// Comment represents an issue comment
+type Comment struct {
+	ID         string             `json:"id"`
+	Author     User               `json:"author"`
+	Body       *ADFDocument       `json:"body"`
+	Created    string             `json:"created"`
+	Updated    string             `json:"updated"`
+	Visibility *CommentVisibility `json:"visibility,omitempty"`
+}
+
+// Field represents a Jira field definition
+type Field struct {
+	ID          string      `json:"id"`
+	Key         string      `json:"key"`
+	Name        string      `json:"name"`
+	Custom      bool        `json:"custom"`
+	Orderable   bool        `json:"orderable"`
+	Navigable   bool        `json:"navigable"`
+	Searchable  bool        `json:"searchable"`
+	Schema      FieldSchema `json:"schema,omitempty"`
+	ClauseNames []string    `json:"clauseNames,omitempty"`
+}
+
+// FieldSchema describes the data type of a field
+type FieldSchema struct {
+	Type     string `json:"type"`
+	Items    string `json:"items,omitempty"`
+	System   string `json:"system,omitempty"`
+	Custom   string `json:"custom,omitempty"`
+	CustomID int    `json:"customId,omitempty"`
+}
+
+// SearchResult represents search results from Jira APIs
+// that use offset-based pagination (e.g., Agile API sprint issues).
+type SearchResult struct {
+	StartAt    int     `json:"startAt"`
+	MaxResults int     `json:"maxResults"`
+	Total      int     `json:"total"`
+	Issues     []Issue `json:"issues"`
+}
+
+// JQLSearchResult represents results from the /search/jql endpoint,
+// which uses cursor-based pagination.
+type JQLSearchResult struct {
+	Issues        []Issue `json:"issues"`
+	NextPageToken string  `json:"nextPageToken,omitempty"`
+	IsLast        bool    `json:"isLast"`
+}
+
+// SearchPageOptions contains options for searching issues with automatic pagination.
+// MaxResults controls the total number of results desired; when it exceeds the
+// per-request PageSize (capped at 100), SearchPage auto-paginates internally.
+type SearchPageOptions struct {
+	JQL           string
+	PageSize      int
+	MaxResults    int
+	Fields        []string
+	NextPageToken string
+}
+
+// PaginatedIssues wraps issues with cursor-based pagination metadata.
+type PaginatedIssues struct {
+	Issues     []Issue        `json:"issues"`
+	Pagination PaginationInfo `json:"pagination"`
+}
+
+// PaginationInfo contains cursor-based pagination metadata.
+type PaginationInfo struct {
+	Total         int    `json:"total"`
+	PageSize      int    `json:"pageSize"`
+	IsLast        bool   `json:"isLast"`
+	NextPageToken string `json:"nextPageToken,omitempty"`
+}
+
+// BoardsResponse represents the response from listing boards
+type BoardsResponse struct {
+	MaxResults int     `json:"maxResults"`
+	StartAt    int     `json:"startAt"`
+	Total      int     `json:"total"`
+	IsLast     bool    `json:"isLast"`
+	Values     []Board `json:"values"`
+}
+
+// SprintsResponse represents the response from listing sprints
+type SprintsResponse struct {
+	MaxResults int      `json:"maxResults"`
+	StartAt    int      `json:"startAt"`
+	IsLast     bool     `json:"isLast"`
+	Values     []Sprint `json:"values"`
+}
+
+// TransitionsResponse represents available transitions
+type TransitionsResponse struct {
+	Transitions []Transition `json:"transitions"`
+}
+
+// CommentsResponse represents issue comments
+type CommentsResponse struct {
+	StartAt    int       `json:"startAt"`
+	MaxResults int       `json:"maxResults"`
+	Total      int       `json:"total"`
+	Comments   []Comment `json:"comments"`
+}
+
+// CreateIssueRequest represents a request to create an issue
+type CreateIssueRequest struct {
+	Fields map[string]any `json:"fields"`
+}
+
+// UpdateIssueRequest represents a request to update an issue
+type UpdateIssueRequest struct {
+	Fields map[string]any `json:"fields,omitempty"`
+	Update map[string]any `json:"update,omitempty"`
+}
+
+// TransitionRequest represents a request to transition an issue
+type TransitionRequest struct {
+	Transition TransitionID   `json:"transition"`
+	Fields     map[string]any `json:"fields,omitempty"`
+}
+
+// TransitionID wraps a transition ID
+type TransitionID struct {
+	ID string `json:"id"`
+}
+
+// AddCommentRequest represents a request to add a comment
+type AddCommentRequest struct {
+	Body *ADFDocument `json:"body"`
+}

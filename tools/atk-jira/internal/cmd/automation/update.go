@@ -1,0 +1,92 @@
+package automation
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+
+	"github.com/spf13/cobra"
+
+	"github.com/wohsj110/atlassian_cli/shared/present"
+
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/internal/cmd/root"
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/internal/mutation"
+	atkpresent "github.com/wohsj110/atlassian_cli/tools/atk-jira/internal/present"
+)
+
+func newUpdateCmd(opts *root.Options) *cobra.Command {
+	var filePath string
+
+	cmd := &cobra.Command{
+		Use:   "update <rule-id>",
+		Short: "Update an automation rule from a JSON file",
+		Long: `Update an automation rule by replacing it with a JSON file.
+
+IMPORTANT: Always export the current rule first before editing:
+
+  atk-jira auto export <rule-id> > rule.json
+  # Edit rule.json — only change fields you understand
+  atk-jira auto update <rule-id> --file rule.json
+
+Automation rule components (triggers, conditions, actions) use undocumented
+schemas. Only modify fields you understand. If you are unsure what a field
+does, do not change it.
+
+The safest edits are to rule metadata: name, description, labels, and
+enabled/disabled state (prefer 'atk-jira auto enable/disable' for state changes).
+Component-level edits require understanding of the specific Jira instance's
+field mappings and workflow configuration.`,
+		Example: `  atk-jira automation update 12345 --file rule.json
+  atk-jira auto update 12345 --file updated-rule.json`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runUpdate(cmd.Context(), opts, args[0], filePath)
+		},
+	}
+
+	cmd.Flags().StringVarP(&filePath, "file", "F", "", "Path to JSON file containing the rule definition (required)")
+	_ = cmd.MarkFlagRequired("file")
+
+	return cmd
+}
+
+func runUpdate(ctx context.Context, opts *root.Options, ruleID, filePath string) error {
+	data, err := os.ReadFile(filePath) //nolint:gosec // CLI tool reads user-provided file paths
+	if err != nil {
+		return err
+	}
+
+	if !json.Valid(data) {
+		return fmt.Errorf("file %s does not contain valid JSON", filePath)
+	}
+
+	client, err := opts.APIClient()
+	if err != nil {
+		return err
+	}
+
+	if err := client.UpdateAutomationRule(ctx, ruleID, json.RawMessage(data)); err != nil {
+		return err
+	}
+
+	if opts.EmitIDOnly() {
+		return atkpresent.EmitIDs(opts, []string{ruleID})
+	}
+
+	return mutation.WriteAndPresent(ctx, opts, mutation.Config{
+		Write: func(_ context.Context) (string, error) {
+			return ruleID, nil
+		},
+		Fetch: func(ctx context.Context, id string) (*present.OutputModel, error) {
+			rule, err := client.GetAutomationRule(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			return atkpresent.AutomationPresenter{}.PresentDetail(rule, false), nil
+		},
+		Fallback: func(id string) *present.OutputModel {
+			return atkpresent.AutomationPresenter{}.PresentUpdated(id)
+		},
+	})
+}

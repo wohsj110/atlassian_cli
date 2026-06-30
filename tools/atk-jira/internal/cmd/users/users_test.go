@@ -1,0 +1,573 @@
+package users
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/wohsj110/atlassian_cli/shared/testutil"
+
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/api"
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/internal/cache"
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/internal/cmd/root"
+)
+
+func newClient(t *testing.T, url string) *api.Client {
+	t.Helper()
+	c, err := api.New(api.ClientConfig{URL: url, Email: "test@test.com", APIToken: "token"})
+	testutil.RequireNoError(t, err)
+	return c
+}
+
+func newTestUserServer(_ *testing.T, user api.User) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(user)
+	}))
+}
+
+func newTestUsersServer(_ *testing.T, users []api.User) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(users)
+	}))
+}
+
+func humanUser(accountID, name string) api.User {
+	return api.User{AccountID: accountID, AccountType: "atlassian", DisplayName: name, Active: true}
+}
+
+func nonHumanUser(accountID, accountType, name string) api.User {
+	return api.User{AccountID: accountID, AccountType: accountType, DisplayName: name, Active: true}
+}
+
+// ----- users get -----
+
+func TestNewGetCmd(t *testing.T) {
+	t.Parallel()
+	opts := &root.Options{}
+	cmd := newGetCmd(opts)
+
+	testutil.Equal(t, cmd.Use, "get <account-id>")
+	testutil.NotEmpty(t, cmd.Short)
+	testutil.NotNil(t, cmd.Flags().Lookup("fields"))
+}
+
+func TestRunGet_DefaultOutputMatchesSpecOneLiner(t *testing.T) {
+	t.Parallel()
+	server := newTestUserServer(t, api.User{AccountID: "abc123", DisplayName: "John Doe", EmailAddress: "john@example.com", Active: true})
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{NoColor: true, Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	testutil.RequireNoError(t, runGet(context.Background(), opts, "abc123", ""))
+
+	want := "abc123 | John Doe | john@example.com\n"
+	if stdout.String() != want {
+		t.Errorf("get default output:\ngot:  %q\nwant: %q", stdout.String(), want)
+	}
+}
+
+func TestRunGet_Extended_EmitsThreeSpecRows(t *testing.T) {
+	t.Parallel()
+	user := api.User{
+		AccountID: "abc", DisplayName: "Rian", EmailAddress: "r@x.io", Active: true,
+		TimeZone: "Etc/GMT", Locale: "en_US",
+		Groups: &api.UserCountBlock{Size: 9}, ApplicationRoles: &api.UserCountBlock{Size: 1},
+	}
+	server := newTestUserServer(t, user)
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{NoColor: true, Extended: true, Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	testutil.RequireNoError(t, runGet(context.Background(), opts, "abc", ""))
+
+	want := "abc | Rian | r@x.io\n" +
+		"Timezone: Etc/GMT   Locale: en_US   Active: yes\n" +
+		"Groups: 9   Application Roles: 1\n"
+	if stdout.String() != want {
+		t.Errorf("get --extended:\ngot:  %q\nwant: %q", stdout.String(), want)
+	}
+}
+
+func TestRunGet_IDOnly_ShortCircuitsEverythingElse(t *testing.T) {
+	t.Parallel()
+	server := newTestUserServer(t, api.User{AccountID: "abc123", DisplayName: "X", Active: true})
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{IDOnly: true, Extended: true, Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	testutil.RequireNoError(t, runGet(context.Background(), opts, "abc123", "NAME,EMAIL"))
+	testutil.Equal(t, stdout.String(), "abc123\n")
+}
+
+func TestRunGet_Fields_ProjectsDetailSection(t *testing.T) {
+	t.Parallel()
+	user := api.User{AccountID: "abc", DisplayName: "Rian", EmailAddress: "r@x.io", Active: true}
+	server := newTestUserServer(t, user)
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{NoColor: true, Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	testutil.RequireNoError(t, runGet(context.Background(), opts, "abc", "NAME,EMAIL"))
+
+	// Identity is prepended by projection.Resolve; output flattens to labeled
+	// Key:Value lines mirroring `issues get --fields`.
+	want := "ACCOUNT_ID: abc\nNAME: Rian\nEMAIL: r@x.io\n"
+	if stdout.String() != want {
+		t.Errorf("get --fields:\ngot:  %q\nwant: %q", stdout.String(), want)
+	}
+}
+
+func TestRunGet_Fields_UnknownHeaderFails(t *testing.T) {
+	t.Parallel()
+	server := newTestUserServer(t, api.User{AccountID: "abc", DisplayName: "X", Active: true})
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	// Trigger the no-op fetch path (noFieldFetch returns nil) — this token
+	// matches no header, no FieldID, and no human name. It must surface as
+	// UnknownFieldError, not an UnrenderedFieldError or an API call.
+	err := runGet(context.Background(), opts, "abc", "NOSUCHFIELD")
+	testutil.NotNil(t, err)
+	testutil.Contains(t, err.Error(), "unknown field")
+}
+
+func TestRunGet_IDOnly_SkipsAPIFetch(t *testing.T) {
+	t.Parallel()
+	// The accountID is its own canonical identifier — no API round-trip is
+	// needed in --id mode. A server that fails any request would return an
+	// error if we accidentally called it; the test passes only because no
+	// request happens.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "no request should be made in --id mode", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{IDOnly: true, Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	testutil.RequireNoError(t, runGet(context.Background(), opts, "abc123", ""))
+	testutil.Equal(t, stdout.String(), "abc123\n")
+}
+
+// ----- users search -----
+
+func TestNewSearchCmd(t *testing.T) {
+	t.Parallel()
+	opts := &root.Options{}
+	cmd := newSearchCmd(opts)
+
+	testutil.Equal(t, cmd.Use, "search <query>")
+	maxFlag := cmd.Flags().Lookup("max")
+	testutil.NotNil(t, maxFlag)
+	testutil.NotNil(t, cmd.Flags().Lookup("next-page-token"))
+	testutil.NotNil(t, cmd.Flags().Lookup("fields"))
+	testutil.Equal(t, maxFlag.DefValue, "50")
+	testutil.Equal(t, maxFlag.Shorthand, "m")
+}
+
+func TestRunSearch_DefaultTableMatchesSpecColumnOrder(t *testing.T) {
+	t.Parallel()
+	users := []api.User{
+		{AccountID: "a1", AccountType: "atlassian", DisplayName: "Alice", EmailAddress: "a@x.io", Active: true},
+		{AccountID: "b2", AccountType: "atlassian", DisplayName: "Bob", Active: true},
+	}
+	server := newTestUsersServer(t, users)
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{NoColor: true, Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	testutil.RequireNoError(t, runSearch(context.Background(), opts, "al", 10, "", ""))
+
+	want := "ACCOUNT_ID | NAME | EMAIL | ACTIVE\n" +
+		"a1 | Alice | a@x.io | yes\n" +
+		"b2 | Bob | - | yes\n"
+	if stdout.String() != want {
+		t.Errorf("users search default:\ngot:  %q\nwant: %q", stdout.String(), want)
+	}
+}
+
+func TestRunSearch_Extended_AppendsTimezoneLocale(t *testing.T) {
+	t.Parallel()
+	users := []api.User{
+		{AccountID: "a1", AccountType: "atlassian", DisplayName: "Alice", EmailAddress: "a@x.io", Active: true, TimeZone: "Etc/GMT", Locale: "en_US"},
+	}
+	server := newTestUsersServer(t, users)
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{NoColor: true, Extended: true, Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	testutil.RequireNoError(t, runSearch(context.Background(), opts, "al", 10, "", ""))
+
+	want := "ACCOUNT_ID | NAME | EMAIL | ACTIVE | TIMEZONE | LOCALE\n" +
+		"a1 | Alice | a@x.io | yes | Etc/GMT | en_US\n"
+	if stdout.String() != want {
+		t.Errorf("users search --extended:\ngot:  %q\nwant: %q", stdout.String(), want)
+	}
+}
+
+func TestRunSearch_Extended_DashesForRedactedFields(t *testing.T) {
+	t.Parallel()
+	// Instances that omit timeZone/locale from /user/search must not render
+	// literal "false"/empty strings in the table cells.
+	users := []api.User{{AccountID: "a1", AccountType: "atlassian", DisplayName: "Alice", Active: true}}
+	server := newTestUsersServer(t, users)
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{NoColor: true, Extended: true, Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	testutil.RequireNoError(t, runSearch(context.Background(), opts, "al", 10, "", ""))
+
+	want := "ACCOUNT_ID | NAME | EMAIL | ACTIVE | TIMEZONE | LOCALE\n" +
+		"a1 | Alice | - | yes | - | -\n"
+	if stdout.String() != want {
+		t.Errorf("users search --extended (redacted):\ngot:  %q\nwant: %q", stdout.String(), want)
+	}
+}
+
+func TestRunSearch_IDOnly_EmitsKeysOnly(t *testing.T) {
+	t.Parallel()
+	users := []api.User{
+		humanUser("a1", "Alice"),
+		humanUser("b2", "Bob"),
+	}
+	server := newTestUsersServer(t, users)
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{IDOnly: true, Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	testutil.RequireNoError(t, runSearch(context.Background(), opts, "al", 10, "", ""))
+	testutil.Equal(t, stdout.String(), "a1\nb2\n")
+}
+
+func TestRunSearch_DefaultFiltersToActiveAtlassianUsers(t *testing.T) {
+	t.Parallel()
+	users := []api.User{
+		{AccountID: "human", AccountType: "atlassian", DisplayName: "Alice", EmailAddress: "alice@example.com", Active: true},
+		{AccountID: "inactive", AccountType: "atlassian", DisplayName: "Inactive Alice", Active: false},
+		nonHumanUser("app", "app", "Automation for Jira"),
+		nonHumanUser("customer", "customer", "Portal Customer"),
+		{AccountID: "missing", DisplayName: "Unknown Account", Active: true},
+	}
+	server := newTestUsersServer(t, users)
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{NoColor: true, Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	testutil.RequireNoError(t, runSearch(context.Background(), opts, "a", 10, "", ""))
+
+	want := "ACCOUNT_ID | NAME | EMAIL | ACTIVE\n" +
+		"human | Alice | alice@example.com | yes\n"
+	if stdout.String() != want {
+		t.Errorf("users search filtered default:\ngot:  %q\nwant: %q", stdout.String(), want)
+	}
+}
+
+func TestRunSearch_IDOnlyFiltersToActiveAtlassianUsers(t *testing.T) {
+	t.Parallel()
+	users := []api.User{
+		humanUser("human", "Alice"),
+		nonHumanUser("app", "app", "Automation for Jira"),
+		{AccountID: "inactive", AccountType: "atlassian", DisplayName: "Inactive Alice", Active: false},
+	}
+	server := newTestUsersServer(t, users)
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{IDOnly: true, Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	testutil.RequireNoError(t, runSearch(context.Background(), opts, "a", 10, "", ""))
+	testutil.Equal(t, stdout.String(), "human\n")
+}
+
+func TestRunSearch_HasMore_AppendsTokenizedContinuation(t *testing.T) {
+	t.Parallel()
+	// len(users) == --max triggers hasMore. Continuation line embeds next
+	// startAt per #230. Exact-string golden locks the full output shape
+	// (header + rows + continuation) so accidental drift in any of the three
+	// sections gets caught.
+	users := []api.User{
+		humanUser("a1", "Alice"),
+		humanUser("b2", "Bob"),
+	}
+	server := newTestUsersServer(t, users)
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{NoColor: true, Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	testutil.RequireNoError(t, runSearch(context.Background(), opts, "al", 2, "", ""))
+
+	want := "ACCOUNT_ID | NAME | EMAIL | ACTIVE\n" +
+		"a1 | Alice | - | yes\n" +
+		"b2 | Bob | - | yes\n" +
+		"More results available (next: 2)\n"
+	if stdout.String() != want {
+		t.Errorf("users search with pagination:\ngot:  %q\nwant: %q", stdout.String(), want)
+	}
+}
+
+func TestRunSearch_PaginationUsesRawUpstreamResultCount(t *testing.T) {
+	t.Parallel()
+	users := []api.User{
+		humanUser("a1", "Alice"),
+		nonHumanUser("app", "app", "Automation for Jira"),
+	}
+	server := newTestUsersServer(t, users)
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{NoColor: true, Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	testutil.RequireNoError(t, runSearch(context.Background(), opts, "a", 2, "20", ""))
+
+	want := "ACCOUNT_ID | NAME | EMAIL | ACTIVE\n" +
+		"a1 | Alice | - | yes\n" +
+		"More results available (next: 22)\n"
+	if stdout.String() != want {
+		t.Errorf("users search filtered pagination:\ngot:  %q\nwant: %q", stdout.String(), want)
+	}
+}
+
+func TestRunSearch_EmptyFilteredPageKeepsContinuation(t *testing.T) {
+	t.Parallel()
+	users := []api.User{
+		nonHumanUser("app", "app", "Automation for Jira"),
+		{AccountID: "inactive", AccountType: "atlassian", DisplayName: "Inactive Alice", Active: false},
+	}
+	server := newTestUsersServer(t, users)
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{NoColor: true, Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	testutil.RequireNoError(t, runSearch(context.Background(), opts, "a", 2, "", ""))
+
+	want := "No users found matching 'a'\n" +
+		"More results available (next: 2)\n"
+	if stdout.String() != want {
+		t.Errorf("users search empty filtered pagination:\ngot:  %q\nwant: %q", stdout.String(), want)
+	}
+}
+
+func TestRunSearch_IDOnlyEmptyFilteredPageKeepsContinuation(t *testing.T) {
+	t.Parallel()
+	users := []api.User{
+		nonHumanUser("app", "app", "Automation for Jira"),
+		{AccountID: "inactive", AccountType: "atlassian", DisplayName: "Inactive Alice", Active: false},
+	}
+	server := newTestUsersServer(t, users)
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{IDOnly: true, Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	testutil.RequireNoError(t, runSearch(context.Background(), opts, "a", 2, "", ""))
+	testutil.Equal(t, stdout.String(), "More results available (next: 2)\n")
+}
+
+func TestRunSearch_IDOnly_EmitsTokenizedContinuation(t *testing.T) {
+	t.Parallel()
+	users := []api.User{
+		humanUser("a1", "Alice"),
+		humanUser("b2", "Bob"),
+	}
+	server := newTestUsersServer(t, users)
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{IDOnly: true, Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	testutil.RequireNoError(t, runSearch(context.Background(), opts, "al", 2, "", ""))
+	testutil.Equal(t, stdout.String(), "a1\nb2\nMore results available (next: 2)\n")
+}
+
+func TestRunSearch_NextPageToken_AdvancesStartAt(t *testing.T) {
+	t.Parallel()
+	var capturedStartAt string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedStartAt = r.URL.Query().Get("startAt")
+		_ = json.NewEncoder(w).Encode([]api.User{{AccountID: "c3", DisplayName: "Carol"}})
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{NoColor: true, Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	testutil.RequireNoError(t, runSearch(context.Background(), opts, "al", 10, "20", ""))
+	testutil.Equal(t, capturedStartAt, "20")
+}
+
+func TestRunSearch_NextPageToken_RejectsNonNumeric(t *testing.T) {
+	t.Parallel()
+	server := newTestUsersServer(t, []api.User{})
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	err := runSearch(context.Background(), opts, "al", 10, "not-a-number", "")
+	testutil.NotNil(t, err)
+	testutil.Contains(t, err.Error(), "invalid --next-page-token")
+}
+
+func TestRunSearch_NextPageToken_RejectsNegative(t *testing.T) {
+	t.Parallel()
+	// strconv.Atoi happily parses "-1"; the n < 0 guard must still reject it.
+	server := newTestUsersServer(t, []api.User{})
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	err := runSearch(context.Background(), opts, "al", 10, "-1", "")
+	testutil.NotNil(t, err)
+	testutil.Contains(t, err.Error(), "invalid --next-page-token")
+	testutil.Contains(t, err.Error(), "non-negative")
+}
+
+func TestRunSearch_Fields_ProjectsToSelectedColumns(t *testing.T) {
+	t.Parallel()
+	users := []api.User{{AccountID: "a1", AccountType: "atlassian", DisplayName: "Alice", EmailAddress: "a@x.io", Active: true}}
+	server := newTestUsersServer(t, users)
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{NoColor: true, Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	testutil.RequireNoError(t, runSearch(context.Background(), opts, "al", 10, "", "NAME"))
+
+	// ACCOUNT_ID is the identity column and is always retained.
+	want := "ACCOUNT_ID | NAME\na1 | Alice\n"
+	if stdout.String() != want {
+		t.Errorf("users search --fields NAME:\ngot:  %q\nwant: %q", stdout.String(), want)
+	}
+}
+
+func TestRunSearch_Empty_ShowsFriendlyMessage(t *testing.T) {
+	t.Parallel()
+	server := newTestUsersServer(t, []api.User{})
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	testutil.RequireNoError(t, runSearch(context.Background(), opts, "ghost", 10, "", ""))
+	testutil.Contains(t, stdout.String(), "No users found")
+}
+
+func TestRunSearch_ExpandParamNotSentOnSearchEndpoint(t *testing.T) {
+	t.Parallel()
+	// /user/search ignores expand; we must not send it (wasted bytes + risk
+	// of upstream behavior change).
+	var captured string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured = r.URL.Query().Get("expand")
+		_ = json.NewEncoder(w).Encode([]api.User{})
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	testutil.RequireNoError(t, runSearch(context.Background(), opts, "al", 10, "", ""))
+	if captured != "" {
+		t.Errorf("expand param should not be sent to /user/search, got %q", captured)
+	}
+}
+
+// ----- cache-backed users get -----
+
+func TestRunGet_FreshCacheSkipsLive(t *testing.T) {
+	t.Cleanup(cache.SetRootForTest(t.TempDir()))
+	t.Cleanup(cache.SetInstanceKeyForTest("test.atlassian.net"))
+
+	testutil.RequireNoError(t, cache.WriteResource("users", "24h", []api.User{
+		{AccountID: "abc123", DisplayName: "Alice", EmailAddress: "alice@example.com", Active: true},
+	}))
+
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		t.Fatal("live API must not be called when users cache is fresh")
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	err := runGet(context.Background(), opts, "abc123", "")
+	testutil.RequireNoError(t, err)
+	testutil.Contains(t, stdout.String(), "Alice")
+}
+
+func TestRunGet_ExtendedAlwaysCallsLive(t *testing.T) {
+	t.Cleanup(cache.SetRootForTest(t.TempDir()))
+	t.Cleanup(cache.SetInstanceKeyForTest("test.atlassian.net"))
+
+	testutil.RequireNoError(t, cache.WriteResource("users", "24h", []api.User{
+		{AccountID: "abc123", DisplayName: "Cached Alice"},
+	}))
+
+	liveCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest/api/3/user" {
+			liveCalled = true
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(api.User{
+				AccountID:   "abc123",
+				DisplayName: "Live Alice",
+				Groups:      &api.UserCountBlock{Size: 2},
+			})
+		}
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	opts := &root.Options{Stdout: &stdout, Stderr: &bytes.Buffer{}, Extended: true}
+	opts.SetAPIClient(newClient(t, server.URL))
+
+	err := runGet(context.Background(), opts, "abc123", "")
+	testutil.RequireNoError(t, err)
+	if !liveCalled {
+		t.Fatal("users get --extended must always call live API, not use cache")
+	}
+	testutil.Contains(t, stdout.String(), "Live Alice")
+}

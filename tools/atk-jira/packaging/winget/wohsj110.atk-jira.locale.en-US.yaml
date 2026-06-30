@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
+
+PackageIdentifier: wohsj110.atk-jira
+PackageVersion: 0.0.0
+PackageLocale: en-US
+Publisher: wohsj110
+PublisherUrl: https://github.com/wohsj110
+PackageName: Jira Ticket CLI
+PackageUrl: https://github.com/wohsj110/atlassian_cli/tree/main/tools/atk-jira
+License: MIT
+LicenseUrl: https://github.com/wohsj110/atlassian_cli/blob/main/tools/atk-jira/LICENSE
+ShortDescription: Command-line interface for Jira Cloud
+Description: |-
+  A CLI tool for managing Jira issues directly from your terminal.
+  Features include issue creation, viewing, updating, and deletion,
+  workflow transitions, sprint management, JQL search, and comments.
+Tags:
+  - jira
+  - atlassian
+  - cli
+  - ticket
+  - issue-tracking
+  - agile
+ReleaseNotesUrl: https://github.com/wohsj110/atlassian_cli/releases
+ManifestType: defaultLocale
+ManifestVersion: 1.10.0

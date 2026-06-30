@@ -1,0 +1,223 @@
+version: 2
+
+before:
+  hooks:
+    - go test ./shared/... ./tools/atk-jira/... ./tools/atk-cfl/...
+
+builds:
+  - id: atk-jira-darwin
+    main: ./tools/atk-jira/cmd/atk-jira
+    binary: atk-jira
+    flags:
+      - -tags=keyring_no1password,keyring_nopassage
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    overrides:
+      - goos: darwin
+        goarch: amd64
+        goamd64: v1
+        env:
+          - CGO_ENABLED=1
+          - "CC=xcrun clang -arch x86_64"
+      - goos: darwin
+        goarch: arm64
+        goarm64: v8.0
+        env:
+          - CGO_ENABLED=1
+          - "CC=xcrun clang -arch arm64"
+    ldflags:
+      - -s -w
+      - -X github.com/wohsj110/atlassian_cli/shared/version.Version={{.Version}}
+      - -X github.com/wohsj110/atlassian_cli/shared/version.Commit={{.Commit}}
+      - -X github.com/wohsj110/atlassian_cli/shared/version.BuildDate={{.Date}}
+  - id: atk-jira-unix-win
+    main: ./tools/atk-jira/cmd/atk-jira
+    binary: atk-jira
+    flags:
+      - -tags=keyring_no1password,keyring_nopassage
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/wohsj110/atlassian_cli/shared/version.Version={{.Version}}
+      - -X github.com/wohsj110/atlassian_cli/shared/version.Commit={{.Commit}}
+      - -X github.com/wohsj110/atlassian_cli/shared/version.BuildDate={{.Date}}
+  - id: atk-cfl-darwin
+    main: ./tools/atk-cfl/cmd/atk-cfl
+    binary: atk-cfl
+    flags:
+      - -tags=keyring_no1password,keyring_nopassage
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    overrides:
+      - goos: darwin
+        goarch: amd64
+        goamd64: v1
+        env:
+          - CGO_ENABLED=1
+          - "CC=xcrun clang -arch x86_64"
+      - goos: darwin
+        goarch: arm64
+        goarm64: v8.0
+        env:
+          - CGO_ENABLED=1
+          - "CC=xcrun clang -arch arm64"
+    ldflags:
+      - -s -w
+      - -X github.com/wohsj110/atlassian_cli/shared/version.Version={{.Version}}
+      - -X github.com/wohsj110/atlassian_cli/shared/version.Commit={{.Commit}}
+      - -X github.com/wohsj110/atlassian_cli/shared/version.BuildDate={{.Date}}
+  - id: atk-cfl-unix-win
+    main: ./tools/atk-cfl/cmd/atk-cfl
+    binary: atk-cfl
+    flags:
+      - -tags=keyring_no1password,keyring_nopassage
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/wohsj110/atlassian_cli/shared/version.Version={{.Version}}
+      - -X github.com/wohsj110/atlassian_cli/shared/version.Commit={{.Commit}}
+      - -X github.com/wohsj110/atlassian_cli/shared/version.BuildDate={{.Date}}
+
+archives:
+  - id: atk-jira
+    ids:
+      - atk-jira-darwin
+      - atk-jira-unix-win
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "atk-jira_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - tools/atk-jira/README.md
+      - NOTICE.md
+  - id: atk-cfl
+    ids:
+      - atk-cfl-darwin
+      - atk-cfl-unix-win
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "atk-cfl_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - tools/atk-cfl/README.md
+      - NOTICE.md
+
+nfpms:
+  - id: atk-jira
+    ids:
+      - atk-jira-unix-win
+    package_name: atk-jira
+    vendor: wohsj110
+    homepage: https://github.com/wohsj110/atlassian_cli
+    maintainer: wohsj110 <https://github.com/wohsj110>
+    description: Command-line interface for Jira Cloud
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+    contents:
+      - src: LICENSE
+        dst: /usr/share/licenses/atk-jira/LICENSE
+  - id: atk-cfl
+    ids:
+      - atk-cfl-unix-win
+    package_name: atk-cfl
+    vendor: wohsj110
+    homepage: https://github.com/wohsj110/atlassian_cli
+    maintainer: wohsj110 <https://github.com/wohsj110>
+    description: Command-line interface for Atlassian Confluence Cloud
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+    contents:
+      - src: LICENSE
+        dst: /usr/share/licenses/atk-cfl/LICENSE
+
+homebrew_casks:
+  - name: atk-jira
+    ids:
+      - atk-jira
+    skip_upload: true
+    url:
+      template: "https://github.com/wohsj110/atlassian_cli/releases/download/atk-jira-v{{ .Version }}/{{ .ArtifactName }}"
+    repository:
+      owner: wohsj110
+      name: homebrew-tap
+    homepage: https://github.com/wohsj110/atlassian_cli
+    description: "Command-line interface for Jira Cloud"
+    binaries:
+      - atk-jira
+    hooks:
+      post:
+        install: |
+          system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/atk-jira"]
+    caveats: |
+      atk-jira has been installed.
+
+      To configure, run:
+        atk-jira init
+
+      Get your API token from: https://id.atlassian.com/manage-profile/security/api-tokens
+  - name: atk-cfl
+    ids:
+      - atk-cfl
+    skip_upload: true
+    url:
+      template: "https://github.com/wohsj110/atlassian_cli/releases/download/atk-cfl-v{{ .Version }}/{{ .ArtifactName }}"
+    repository:
+      owner: wohsj110
+      name: homebrew-tap
+    homepage: https://github.com/wohsj110/atlassian_cli
+    description: "Command-line interface for Atlassian Confluence"
+    binaries:
+      - atk-cfl
+    hooks:
+      post:
+        install: |
+          system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/atk-cfl"]
+    caveats: |
+      atk-cfl has been installed. Run 'atk-cfl init' to configure.
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  replace_existing_artifacts: true
+  github:
+    owner: wohsj110
+    name: atlassian-cli

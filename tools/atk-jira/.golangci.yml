@@ -1,0 +1,51 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - revive
+    - gosec
+    - errorlint
+    - exhaustive
+  settings:
+    errcheck:
+      exclude-functions:
+        - io.Closer.Close
+        - (*net/http.Response).Body.Close
+        - (net/http.ResponseWriter).Write
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+    revive:
+      # Explicit rule list so behavior is stable across golangci-lint versions
+      # (v2.0.2 used in CI vs. whatever developers install locally). Without
+      # this, revive falls back to defaults that differ between versions —
+      # most visibly, `unused-parameter` flipped between v2.0.2 (enabled)
+      # and later versions (not in the default set on v2.11.4).
+      rules:
+        - name: unused-parameter
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+      - linters:
+          - errcheck
+        source: "defer.*\\.Close\\(\\)"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/wohsj110/atlassian_cli/tools/atk-jira
+
+run:
+  timeout: 5m

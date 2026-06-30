@@ -1,0 +1,286 @@
+package fields
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/spf13/cobra"
+
+	"github.com/wohsj110/atlassian_cli/shared/present"
+	"github.com/wohsj110/atlassian_cli/shared/prompt"
+
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/api"
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/internal/cache"
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/internal/cmd/root"
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/internal/mutation"
+	atkpresent "github.com/wohsj110/atlassian_cli/tools/atk-jira/internal/present"
+)
+
+// Register registers the fields commands
+func Register(parent *cobra.Command, opts *root.Options) {
+	cmd := &cobra.Command{
+		Use:     "fields",
+		Aliases: []string{"field", "f"},
+		Short:   "Manage Jira custom fields",
+		Long:    "Commands for managing custom field definitions, contexts, and options.",
+	}
+
+	cmd.AddCommand(newListCmd(opts))
+	cmd.AddCommand(newShowCmd(opts))
+	cmd.AddCommand(newCreateCmd(opts))
+	cmd.AddCommand(newDeleteCmd(opts))
+	cmd.AddCommand(newRestoreCmd(opts))
+	cmd.AddCommand(newContextsCmd(opts))
+	cmd.AddCommand(newOptionsCmd(opts))
+
+	parent.AddCommand(cmd)
+}
+
+func newListCmd(opts *root.Options) *cobra.Command {
+	var customOnly bool
+	var nameFilter string
+
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List field definitions",
+		Long:  "List all fields or only custom fields. Supports filtering by name with case-insensitive substring matching.",
+		Example: `  # List all fields
+  atk-jira fields list
+
+  # List only custom fields
+  atk-jira fields list --custom-fields
+
+  # Search for fields by name
+  atk-jira fields list --name "story point"
+
+  # Emit only field IDs
+  atk-jira fields list --id`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runList(cmd.Context(), opts, customOnly, nameFilter)
+		},
+	}
+
+	cmd.Flags().BoolVar(&customOnly, "custom-fields", false, "Show only custom fields")
+	cmd.Flags().BoolVar(&customOnly, "custom", false, "Show only custom fields")
+	_ = cmd.Flags().MarkHidden("custom")
+	cmd.Flags().StringVar(&nameFilter, "name", "", "Filter fields by name (case-insensitive substring match)")
+
+	return cmd
+}
+
+func runList(ctx context.Context, opts *root.Options, customOnly bool, nameFilter string) error {
+	client, err := opts.APIClient()
+	if err != nil {
+		return err
+	}
+
+	fields, err := cache.GetFieldsCacheFirst(ctx, client)
+	if err != nil {
+		return err
+	}
+	if customOnly {
+		var custom []api.Field
+		for _, f := range fields {
+			if f.Custom {
+				custom = append(custom, f)
+			}
+		}
+		fields = custom
+	}
+
+	if nameFilter != "" {
+		nameLower := strings.ToLower(nameFilter)
+		var filtered []api.Field
+		for _, f := range fields {
+			if strings.Contains(strings.ToLower(f.Name), nameLower) {
+				filtered = append(filtered, f)
+			}
+		}
+		fields = filtered
+	}
+
+	if opts.EmitIDOnly() {
+		ids := make([]string, len(fields))
+		for i, f := range fields {
+			ids[i] = f.ID
+		}
+		return atkpresent.EmitIDs(opts, ids)
+	}
+
+	if len(fields) == 0 {
+		return atkpresent.Emit(opts, atkpresent.FieldPresenter{}.PresentEmpty())
+	}
+
+	return atkpresent.Emit(opts, atkpresent.FieldPresenter{}.PresentList(fields, opts.IsExtended()))
+}
+
+func newCreateCmd(opts *root.Options) *cobra.Command {
+	var name, fieldType, description string
+
+	cmd := &cobra.Command{
+		Use:   "create",
+		Short: "Create a custom field",
+		Long: `Create a new custom field in Jira.
+
+Common field types:
+  com.atlassian.jira.plugin.system.customfieldtypes:textfield     (single-line text)
+  com.atlassian.jira.plugin.system.customfieldtypes:textarea      (multi-line text)
+  com.atlassian.jira.plugin.system.customfieldtypes:select        (single select)
+  com.atlassian.jira.plugin.system.customfieldtypes:multiselect   (multi select)
+  com.atlassian.jira.plugin.system.customfieldtypes:float         (number)`,
+		Example: `  # Create a single-select field
+  atk-jira fields create --name "Environment" --type com.atlassian.jira.plugin.system.customfieldtypes:select
+
+  # Create a text field with description
+  atk-jira fields create --name "Release Notes" --type com.atlassian.jira.plugin.system.customfieldtypes:textarea --description "Notes for the release"`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runCreate(cmd.Context(), opts, name, fieldType, description)
+		},
+	}
+
+	cmd.Flags().StringVarP(&name, "name", "n", "", "Field name (required)")
+	cmd.Flags().StringVarP(&fieldType, "type", "t", "", "Field type (required)")
+	cmd.Flags().StringVarP(&description, "description", "d", "", "Field description")
+
+	_ = cmd.MarkFlagRequired("name")
+	_ = cmd.MarkFlagRequired("type")
+
+	return cmd
+}
+
+func runCreate(ctx context.Context, opts *root.Options, name, fieldType, description string) error {
+	client, err := opts.APIClient()
+	if err != nil {
+		return err
+	}
+
+	field, err := client.CreateField(ctx, &api.CreateFieldRequest{
+		Name:        name,
+		Type:        fieldType,
+		Description: description,
+	})
+	if err != nil {
+		return err
+	}
+
+	_ = cache.AppendOnCreate[api.Field]("fields", *field)
+
+	if opts.EmitIDOnly() {
+		return atkpresent.EmitIDs(opts, []string{field.ID})
+	}
+
+	return atkpresent.Emit(opts, atkpresent.FieldPresenter{}.PresentList([]api.Field{*field}, opts.IsExtended()))
+}
+
+func newDeleteCmd(opts *root.Options) *cobra.Command {
+	var force bool
+
+	cmd := &cobra.Command{
+		Use:   "delete <field-id>",
+		Short: "Trash a custom field",
+		Long: `Move a custom field to the trash (soft delete).
+
+The field can be restored using 'atk-jira fields restore'.
+Trashed fields are permanently deleted after 60 days.`,
+		Example: `  # Trash a field (will prompt for confirmation)
+  atk-jira fields delete customfield_10100
+
+  # Trash without confirmation
+  atk-jira fields delete customfield_10100 --force`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDelete(cmd.Context(), opts, args[0], force)
+		},
+	}
+
+	cmd.Flags().BoolVar(&force, "force", false, "Skip confirmation prompt")
+
+	return cmd
+}
+
+func runDelete(ctx context.Context, opts *root.Options, fieldID string, force bool) error {
+	if !force && !opts.NonInteractive {
+		fmt.Fprintf(opts.Stderr, "This will trash field %s. It can be restored later.\n", fieldID)
+		fmt.Fprint(opts.Stderr, "Are you sure? [y/N]: ")
+	}
+	confirmed, err := prompt.ConfirmOrFail(force, opts.NonInteractive, opts.Stdin)
+	if err != nil {
+		return err
+	}
+	if !confirmed {
+		model := atkpresent.FieldPresenter{}.PresentDeleteCancelled()
+		out := present.Render(model, opts.RenderStyle())
+		fmt.Fprint(opts.Stdout, out.Stdout)
+		fmt.Fprint(opts.Stderr, out.Stderr)
+		return nil
+	}
+
+	client, err := opts.APIClient()
+	if err != nil {
+		return err
+	}
+
+	if err := client.TrashField(ctx, fieldID); err != nil {
+		return err
+	}
+
+	_ = cache.RemoveOnDelete[api.Field]("fields", func(f api.Field) bool { return f.ID == fieldID })
+
+	model := atkpresent.FieldPresenter{}.PresentDeleted(fieldID)
+	out := present.Render(model, opts.RenderStyle())
+	fmt.Fprint(opts.Stdout, out.Stdout)
+	return nil
+}
+
+func newRestoreCmd(opts *root.Options) *cobra.Command {
+	return &cobra.Command{
+		Use:   "restore <field-id>",
+		Short: "Restore a trashed field",
+		Long:  "Restore a custom field from the trash.",
+		Example: `  # Restore a trashed field
+  atk-jira fields restore customfield_10100`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runRestore(cmd.Context(), opts, args[0])
+		},
+	}
+}
+
+func runRestore(ctx context.Context, opts *root.Options, fieldID string) error {
+	client, err := opts.APIClient()
+	if err != nil {
+		return err
+	}
+
+	if err := client.RestoreField(ctx, fieldID); err != nil {
+		return err
+	}
+
+	_ = cache.Touch("fields")
+
+	if opts.EmitIDOnly() {
+		return atkpresent.EmitIDs(opts, []string{fieldID})
+	}
+
+	return mutation.WriteAndPresent(ctx, opts, mutation.Config{
+		Write: func(_ context.Context) (string, error) {
+			return fieldID, nil
+		},
+		Fetch: func(ctx context.Context, id string) (*present.OutputModel, error) {
+			fields, err := client.GetFields(ctx)
+			if err != nil {
+				return nil, err
+			}
+			for _, f := range fields {
+				if f.ID == id {
+					return atkpresent.FieldPresenter{}.PresentList([]api.Field{f}, opts.IsExtended()), nil
+				}
+			}
+			return nil, fmt.Errorf("field %s not found after restore", id)
+		},
+		Fallback: func(id string) *present.OutputModel {
+			return atkpresent.FieldPresenter{}.PresentRestored(id)
+		},
+	})
+}

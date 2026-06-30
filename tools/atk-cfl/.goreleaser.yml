@@ -1,0 +1,97 @@
+version: 2
+
+project_name: atk-cfl
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: atk-cfl
+    main: ./cmd/atk-cfl
+    binary: atk-cfl
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/wohsj110/atlassian_cli/shared/version.Version={{.Version}}
+      - -X github.com/wohsj110/atlassian_cli/shared/version.Commit={{.Commit}}
+      - -X github.com/wohsj110/atlassian_cli/shared/version.BuildDate={{.Date}}
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+# Linux packages (.deb and .rpm)
+nfpms:
+  - id: atk-cfl
+    package_name: atk-cfl
+    vendor: wohsj110
+    homepage: https://github.com/wohsj110/atlassian_cli/tools/atk-cfl
+    maintainer: wohsj110 <https://github.com/wohsj110>
+    description: Command-line interface for Atlassian Confluence Cloud
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+    contents:
+      - src: LICENSE
+        dst: /usr/share/licenses/atk-cfl/LICENSE
+
+# Homebrew cask with auto-quarantine removal for unsigned binaries
+homebrew_casks:
+  - name: atk-cfl
+    repository:
+      owner: wohsj110
+      name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/wohsj110/atlassian-cli/tree/main/tools/atk-cfl
+    description: "Command-line interface for Atlassian Confluence"
+    binary: atk-cfl
+    hooks:
+      post:
+        install: |
+          system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/atk-cfl"]
+    caveats: |
+      atk-cfl has been installed. Run 'atk-cfl init' to configure.
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^ci:'
+      - '^chore:'
+      - '^Merge pull request'
+  groups:
+    - title: 'Features'
+      regexp: '^feat:'
+      order: 0
+    - title: 'Bug Fixes'
+      regexp: '^fix:'
+      order: 1
+    - title: 'Other'
+      order: 999

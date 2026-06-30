@@ -1,0 +1,63 @@
+// Package automation provides CLI commands for managing Jira automation rules.
+package automation
+
+import (
+	"github.com/spf13/cobra"
+
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/api"
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/internal/cmd/root"
+)
+
+// Register registers the automation commands
+func Register(parent *cobra.Command, opts *root.Options) {
+	cmd := &cobra.Command{
+		Use:     "automation",
+		Aliases: []string{"auto"},
+		Short:   "Manage Jira automation rules",
+		Long: `Commands for viewing and managing Jira automation rules.
+
+Automation rules are managed via the Jira Cloud Automation REST API.
+Rule components (triggers, conditions, actions) use undocumented schemas.
+
+RECOMMENDED WORKFLOW for editing rules:
+  1. atk-jira auto list                        # Find the rule
+  2. atk-jira auto get <id>                    # Understand it
+  3. atk-jira auto export <id> > rule.json     # Export for editing
+  4. # Edit rule.json carefully
+  5. atk-jira auto update <id> --file rule.json # Apply changes
+
+The safest edits are to rule metadata (name, labels, description).
+Component-level edits require understanding of the specific Jira instance.
+Use enable/disable to toggle rules without touching the full definition.`,
+		// IsBearerAuth guards non-Agile scope-restricted APIs (Automation, Dashboard).
+		// Agile API commands (boards, sprints) use SupportsAgile() instead.
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			// Cobra does not chain PersistentPreRunE — this hook shadows
+			// the root's, so we must invoke the backend-selection wiring
+			// explicitly. Without this, --backend / keyring.backend silently
+			// stop applying on the `automation` command path.
+			if err := root.WireBackendSelection(cmd); err != nil {
+				return err
+			}
+			client, err := opts.APIClient()
+			if err != nil {
+				return err
+			}
+			if client.IsBearerAuth() {
+				return api.ErrAutomationUnavailable
+			}
+			return nil
+		},
+	}
+
+	cmd.AddCommand(newListCmd(opts))
+	cmd.AddCommand(newGetCmd(opts))
+	cmd.AddCommand(newExportCmd(opts))
+	cmd.AddCommand(newCreateCmd(opts))
+	cmd.AddCommand(newUpdateCmd(opts))
+	cmd.AddCommand(newEnableCmd(opts))
+	cmd.AddCommand(newDisableCmd(opts))
+	cmd.AddCommand(newDeleteCmd(opts))
+
+	parent.AddCommand(cmd)
+}

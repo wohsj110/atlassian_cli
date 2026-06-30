@@ -1,0 +1,109 @@
+version: 2
+
+project_name: atk-jira
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: atk-jira
+    main: ./cmd/atk-jira
+    binary: atk-jira
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/wohsj110/atlassian_cli/shared/version.Version={{.Version}}
+      - -X github.com/wohsj110/atlassian_cli/shared/version.Commit={{.Commit}}
+      - -X github.com/wohsj110/atlassian_cli/shared/version.BuildDate={{.Date}}
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "atk-jira_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+# Linux packages (.deb and .rpm)
+nfpms:
+  - id: atk-jira
+    package_name: atk-jira
+    vendor: wohsj110
+    homepage: https://github.com/wohsj110/atlassian_cli/tools/atk-jira
+    maintainer: wohsj110 <https://github.com/wohsj110>
+    description: Command-line interface for Jira Cloud
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+    contents:
+      - src: LICENSE
+        dst: /usr/share/licenses/atk-jira/LICENSE
+
+checksum:
+  name_template: 'checksums.txt'
+
+# Homebrew cask with auto-quarantine removal for unsigned binaries
+homebrew_casks:
+  - name: atk-jira
+    repository:
+      owner: wohsj110
+      name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/wohsj110/atlassian_cli/tools/atk-jira
+    description: "Command-line interface for Jira Cloud"
+    hooks:
+      post:
+        install: |
+          system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/atk-jira"]
+    caveats: |
+      atk-jira has been installed.
+
+      To configure, run:
+        atk-jira init
+
+      Get your API token from: https://id.atlassian.com/manage-profile/security/api-tokens
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^ci:'
+      - '^chore:'
+      - '^Merge pull request'
+  groups:
+    - title: 'Features'
+      regexp: '^feat:'
+      order: 0
+    - title: 'Bug Fixes'
+      regexp: '^fix:'
+      order: 1
+    - title: 'Other'
+      order: 999
+
+release:
+  github:
+    owner: wohsj110
+    name: atlassian-cli

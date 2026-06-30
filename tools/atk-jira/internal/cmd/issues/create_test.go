@@ -1,0 +1,704 @@
+package issues
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/wohsj110/atlassian_cli/shared/testutil"
+
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/api"
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/internal/cache"
+	"github.com/wohsj110/atlassian_cli/tools/atk-jira/internal/cmd/root"
+)
+
+func TestRunCreate_RequestBodyNoDoubleQuoting(t *testing.T) {
+	seedCacheForIssues(t)
+	var capturedBody []byte
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest/api/3/issue" && r.Method == "POST" {
+			capturedBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(api.Issue{
+				Key: "TEST-1",
+				ID:  "10001",
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{
+		URL:      server.URL,
+		Email:    "test@example.com",
+		APIToken: "token",
+	})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{
+		Stdout: &stdout,
+		Stderr: &bytes.Buffer{},
+	}
+	opts.SetAPIClient(client)
+
+	err = runCreate(context.Background(), opts, "MYPROJECT", "Task", "Fix login bug", "Users cannot log in with SSO credentials", "", "", nil)
+	testutil.RequireNoError(t, err)
+
+	// Parse the captured request body
+	testutil.NotEmpty(t, capturedBody)
+
+	var reqBody map[string]any
+	err = json.Unmarshal(capturedBody, &reqBody)
+	testutil.RequireNoError(t, err)
+
+	fields := reqBody["fields"].(map[string]any)
+
+	// Summary must be the exact string without extra quotes
+	summary := fields["summary"].(string)
+	testutil.Equal(t, summary, "Fix login bug")
+	testutil.NotContains(t, summary, `"`)
+
+	// Description should be ADF format, extract text from first paragraph
+	desc := fields["description"].(map[string]any)
+	testutil.Equal(t, desc["type"], "doc")
+	content := desc["content"].([]any)
+	testutil.NotEmpty(t, content)
+
+	// Walk ADF to extract text
+	firstPara := content[0].(map[string]any)
+	paraContent := firstPara["content"].([]any)
+	firstTextNode := paraContent[0].(map[string]any)
+	descText := firstTextNode["text"].(string)
+	testutil.Equal(t, descText, "Users cannot log in with SSO credentials")
+	testutil.NotContains(t, descText, `"`)
+}
+
+func TestRunCreate_SummaryWithSpecialCharacters(t *testing.T) {
+	seedCacheForIssues(t)
+	var capturedBody []byte
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest/api/3/issue" && r.Method == "POST" {
+			capturedBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(api.Issue{Key: "TEST-2", ID: "10002"})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{
+		URL:      server.URL,
+		Email:    "test@example.com",
+		APIToken: "token",
+	})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{
+		Stdout: &stdout,
+		Stderr: &bytes.Buffer{},
+	}
+	opts.SetAPIClient(client)
+
+	err = runCreate(context.Background(), opts, "PROJ", "Bug", `Error: "unexpected token" in parser`, "", "", "", nil)
+	testutil.RequireNoError(t, err)
+
+	var reqBody map[string]any
+	err = json.Unmarshal(capturedBody, &reqBody)
+	testutil.RequireNoError(t, err)
+
+	fields := reqBody["fields"].(map[string]any)
+	summary := fields["summary"].(string)
+	testutil.Equal(t, summary, `Error: "unexpected token" in parser`)
+}
+
+func TestNewCreateCmd(t *testing.T) {
+	opts := &root.Options{}
+	cmd := newCreateCmd(opts)
+
+	testutil.Equal(t, cmd.Use, "create")
+	testutil.Equal(t, cmd.Short, "Create a new issue")
+
+	// Check required flags
+	summaryFlag := cmd.Flags().Lookup("summary")
+	testutil.NotNil(t, summaryFlag)
+	testutil.Equal(t, summaryFlag.Shorthand, "s")
+
+	projectFlag := cmd.Flags().Lookup("project")
+	testutil.NotNil(t, projectFlag)
+	testutil.Equal(t, projectFlag.Shorthand, "p")
+
+	descFlag := cmd.Flags().Lookup("description")
+	testutil.NotNil(t, descFlag)
+	testutil.Equal(t, descFlag.Shorthand, "d")
+
+	parentFlag := cmd.Flags().Lookup("parent")
+	testutil.NotNil(t, parentFlag)
+	testutil.Equal(t, parentFlag.Shorthand, "")
+
+	assigneeFlag := cmd.Flags().Lookup("assignee")
+	testutil.NotNil(t, assigneeFlag)
+	testutil.Equal(t, assigneeFlag.Shorthand, "a")
+}
+
+func TestCreateCmd_CobraExecution_NoDoubleQuoting(t *testing.T) {
+	seedCacheForIssues(t)
+	var capturedBody []byte
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest/api/3/issue" && r.Method == "POST" {
+			capturedBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(api.Issue{Key: "TEST-1", ID: "10001"})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{
+		URL:      server.URL,
+		Email:    "test@example.com",
+		APIToken: "token",
+	})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{
+		Stdout: &stdout,
+		Stderr: &bytes.Buffer{},
+	}
+	opts.SetAPIClient(client)
+
+	cmd := newCreateCmd(opts)
+	cmd.SetArgs([]string{
+		"--project", "PROJ",
+		"--type", "Task",
+		"--summary", "Fix login bug",
+		"--description", "Users cannot log in with SSO credentials",
+	})
+
+	err = cmd.Execute()
+	testutil.RequireNoError(t, err)
+
+	testutil.NotEmpty(t, capturedBody)
+	var reqBody map[string]any
+	err = json.Unmarshal(capturedBody, &reqBody)
+	testutil.RequireNoError(t, err)
+
+	fields := reqBody["fields"].(map[string]any)
+
+	// Verify no double-quoting via Cobra flag parsing
+	summary := fields["summary"].(string)
+	testutil.Equal(t, summary, "Fix login bug")
+	testutil.False(t, summary[0] == '"', "summary must not start with a literal quote")
+}
+
+func TestRunCreate_WithParent(t *testing.T) {
+	seedCacheForIssues(t)
+	var capturedBody []byte
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest/api/3/issue" && r.Method == "POST" {
+			capturedBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(api.Issue{Key: "PROJ-456", ID: "10456"})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{
+		URL:      server.URL,
+		Email:    "test@example.com",
+		APIToken: "token",
+	})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{
+		Stdout: &stdout,
+		Stderr: &bytes.Buffer{},
+	}
+	opts.SetAPIClient(client)
+
+	err = runCreate(context.Background(), opts, "PROJ", "Task", "Child task", "", "PROJ-100", "", nil)
+	testutil.RequireNoError(t, err)
+
+	testutil.NotEmpty(t, capturedBody)
+	var reqBody map[string]any
+	err = json.Unmarshal(capturedBody, &reqBody)
+	testutil.RequireNoError(t, err)
+
+	fields := reqBody["fields"].(map[string]any)
+
+	// Parent should be an object with "key" field
+	parentField := fields["parent"].(map[string]any)
+	testutil.Equal(t, parentField["key"], "PROJ-100")
+}
+
+func TestRunCreate_WithoutParent(t *testing.T) {
+	seedCacheForIssues(t)
+	var capturedBody []byte
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest/api/3/issue" && r.Method == "POST" {
+			capturedBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(api.Issue{Key: "PROJ-789", ID: "10789"})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{
+		URL:      server.URL,
+		Email:    "test@example.com",
+		APIToken: "token",
+	})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{
+		Stdout: &stdout,
+		Stderr: &bytes.Buffer{},
+	}
+	opts.SetAPIClient(client)
+
+	err = runCreate(context.Background(), opts, "PROJ", "Task", "Standalone task", "", "", "", nil)
+	testutil.RequireNoError(t, err)
+
+	testutil.NotEmpty(t, capturedBody)
+	var reqBody map[string]any
+	err = json.Unmarshal(capturedBody, &reqBody)
+	testutil.RequireNoError(t, err)
+
+	fields := reqBody["fields"].(map[string]any)
+	testutil.Nil(t, fields["parent"])
+}
+
+func TestCreateCmd_CobraExecution_WithParent(t *testing.T) {
+	seedCacheForIssues(t)
+	var capturedBody []byte
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest/api/3/issue" && r.Method == "POST" {
+			capturedBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(api.Issue{Key: "PROJ-456", ID: "10456"})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{
+		URL:      server.URL,
+		Email:    "test@example.com",
+		APIToken: "token",
+	})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{
+		Stdout: &stdout,
+		Stderr: &bytes.Buffer{},
+	}
+	opts.SetAPIClient(client)
+
+	cmd := newCreateCmd(opts)
+	cmd.SetArgs([]string{
+		"--project", "PROJ",
+		"--type", "Task",
+		"--summary", "Child task",
+		"--parent", "PROJ-100",
+	})
+
+	err = cmd.Execute()
+	testutil.RequireNoError(t, err)
+
+	testutil.NotEmpty(t, capturedBody)
+	var reqBody map[string]any
+	err = json.Unmarshal(capturedBody, &reqBody)
+	testutil.RequireNoError(t, err)
+
+	fields := reqBody["fields"].(map[string]any)
+	parentField := fields["parent"].(map[string]any)
+	testutil.Equal(t, parentField["key"], "PROJ-100")
+}
+
+func TestRunCreate_WithAssigneeAccountID(t *testing.T) {
+	seedCacheForIssues(t)
+	var capturedBody []byte
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest/api/3/issue" && r.Method == "POST" {
+			capturedBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(api.Issue{Key: "PROJ-500", ID: "10500"})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{
+		URL:      server.URL,
+		Email:    "test@example.com",
+		APIToken: "token",
+	})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{
+		Stdout: &stdout,
+		Stderr: &bytes.Buffer{},
+	}
+	opts.SetAPIClient(client)
+
+	err = runCreate(context.Background(), opts, "PROJ", "Task", "Assigned task", "", "", "61292e4c4f29230069621c5f", nil)
+	testutil.RequireNoError(t, err)
+
+	testutil.NotEmpty(t, capturedBody)
+	var reqBody map[string]any
+	err = json.Unmarshal(capturedBody, &reqBody)
+	testutil.RequireNoError(t, err)
+
+	fields := reqBody["fields"].(map[string]any)
+	assigneeField := fields["assignee"].(map[string]any)
+	testutil.Equal(t, assigneeField["accountId"], "61292e4c4f29230069621c5f")
+}
+
+func TestRunCreate_WithAssigneeMe(t *testing.T) {
+	seedCacheForIssues(t)
+	var capturedBody []byte
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest/api/3/myself" && r.Method == "GET" {
+			_ = json.NewEncoder(w).Encode(api.User{
+				AccountID:   "myself-account-id",
+				DisplayName: "Test User",
+			})
+			return
+		}
+		if r.URL.Path == "/rest/api/3/issue" && r.Method == "POST" {
+			capturedBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(api.Issue{Key: "PROJ-501", ID: "10501"})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{
+		URL:      server.URL,
+		Email:    "test@example.com",
+		APIToken: "token",
+	})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{
+		Stdout: &stdout,
+		Stderr: &bytes.Buffer{},
+	}
+	opts.SetAPIClient(client)
+
+	err = runCreate(context.Background(), opts, "PROJ", "Task", "My task", "", "", "me", nil)
+	testutil.RequireNoError(t, err)
+
+	testutil.NotEmpty(t, capturedBody)
+	var reqBody map[string]any
+	err = json.Unmarshal(capturedBody, &reqBody)
+	testutil.RequireNoError(t, err)
+
+	fields := reqBody["fields"].(map[string]any)
+	assigneeField := fields["assignee"].(map[string]any)
+	testutil.Equal(t, assigneeField["accountId"], "myself-account-id")
+}
+
+func TestRunCreate_WithAssigneeEmail(t *testing.T) {
+	seedCacheForIssues(t)
+	// Seed a user whose email matches the input so the resolver finds them
+	// in the cache on the fast path. A live /user/search fallback exists for
+	// email-shaped input after cache-miss + refresh, but seeding the cache
+	// here keeps this test hermetic.
+	testutil.RequireNoError(t, cache.WriteResource("users", "24h", []api.User{
+		{AccountID: "found-account-id", DisplayName: "Found User", EmailAddress: "user@example.com"},
+	}))
+	var capturedBody []byte
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest/api/3/issue" && r.Method == "POST" {
+			capturedBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(api.Issue{Key: "PROJ-502", ID: "10502"})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{
+		URL:      server.URL,
+		Email:    "test@example.com",
+		APIToken: "token",
+	})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{
+		Stdout: &stdout,
+		Stderr: &bytes.Buffer{},
+	}
+	opts.SetAPIClient(client)
+
+	err = runCreate(context.Background(), opts, "PROJ", "Task", "Their task", "", "", "user@example.com", nil)
+	testutil.RequireNoError(t, err)
+
+	testutil.NotEmpty(t, capturedBody)
+	var reqBody map[string]any
+	err = json.Unmarshal(capturedBody, &reqBody)
+	testutil.RequireNoError(t, err)
+
+	fields := reqBody["fields"].(map[string]any)
+	assigneeField := fields["assignee"].(map[string]any)
+	testutil.Equal(t, assigneeField["accountId"], "found-account-id")
+}
+
+func TestRunCreate_DescriptionEscapeSequences(t *testing.T) {
+	seedCacheForIssues(t)
+	var capturedBody []byte
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest/api/3/issue" && r.Method == "POST" {
+			capturedBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(api.Issue{Key: "TEST-10", ID: "10010"})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{
+		URL:      server.URL,
+		Email:    "test@example.com",
+		APIToken: "token",
+	})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{
+		Stdout: &stdout,
+		Stderr: &bytes.Buffer{},
+	}
+	opts.SetAPIClient(client)
+
+	// Simulate what the shell passes when user types: --description "First paragraph.\n\nSecond paragraph."
+	// The shell delivers literal backslash-n, not actual newlines.
+	err = runCreate(context.Background(), opts, "PROJ", "Task", "Test", `First paragraph.\n\nSecond paragraph.`, "", "", nil)
+	testutil.RequireNoError(t, err)
+
+	testutil.NotEmpty(t, capturedBody)
+	var reqBody map[string]any
+	err = json.Unmarshal(capturedBody, &reqBody)
+	testutil.RequireNoError(t, err)
+
+	fields := reqBody["fields"].(map[string]any)
+	desc := fields["description"].(map[string]any)
+	testutil.Equal(t, desc["type"], "doc")
+
+	// With escape interpretation, the description should produce multiple paragraphs
+	// (not a single paragraph with literal \n text)
+	content := desc["content"].([]any)
+	testutil.GreaterOrEqual(t, len(content), 2)
+}
+
+func TestRunCreate_WithoutAssignee(t *testing.T) {
+	seedCacheForIssues(t)
+	var capturedBody []byte
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest/api/3/issue" && r.Method == "POST" {
+			capturedBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(api.Issue{Key: "PROJ-503", ID: "10503"})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{
+		URL:      server.URL,
+		Email:    "test@example.com",
+		APIToken: "token",
+	})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{
+		Stdout: &stdout,
+		Stderr: &bytes.Buffer{},
+	}
+	opts.SetAPIClient(client)
+
+	err = runCreate(context.Background(), opts, "PROJ", "Task", "Unassigned task", "", "", "", nil)
+	testutil.RequireNoError(t, err)
+
+	testutil.NotEmpty(t, capturedBody)
+	var reqBody map[string]any
+	err = json.Unmarshal(capturedBody, &reqBody)
+	testutil.RequireNoError(t, err)
+
+	fields := reqBody["fields"].(map[string]any)
+	testutil.Nil(t, fields["assignee"])
+}
+
+func createServerWithPostState(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rest/api/3/issue" && r.Method == "POST" {
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(api.Issue{Key: "TEST-1", ID: "10001"})
+			return
+		}
+		if r.URL.Path == "/rest/api/3/issue/TEST-1" && r.Method == "GET" {
+			issue := map[string]any{
+				"key": "TEST-1",
+				"fields": map[string]any{
+					"summary":   "New issue",
+					"status":    map[string]any{"name": "Backlog"},
+					"issuetype": map[string]any{"name": "Task"},
+					"priority":  map[string]any{"name": "Medium"},
+					"updated":   "2026-04-16T00:00:00.000+0000",
+				},
+			}
+			_ = json.NewEncoder(w).Encode(issue)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+}
+
+func TestRunCreate_ShowsPostState(t *testing.T) {
+	seedCacheForIssues(t)
+	server := createServerWithPostState(t)
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{URL: server.URL, Email: "e@x", APIToken: "t"})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{Stdout: &stdout, Stderr: &bytes.Buffer{}}
+	opts.SetAPIClient(client)
+
+	err = runCreate(context.Background(), opts, "PROJ", "Task", "New issue", "", "", "", nil)
+	testutil.RequireNoError(t, err)
+
+	out := stdout.String()
+	testutil.Contains(t, out, "TEST-1")
+	testutil.Contains(t, out, "New issue")
+	testutil.Contains(t, out, "Backlog")
+}
+
+func TestRunCreate_IDOnly(t *testing.T) {
+	seedCacheForIssues(t)
+	server := createServerWithPostState(t)
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{URL: server.URL, Email: "e@x", APIToken: "t"})
+	testutil.RequireNoError(t, err)
+
+	var stdout bytes.Buffer
+	opts := &root.Options{Stdout: &stdout, Stderr: &bytes.Buffer{}, IDOnly: true}
+	opts.SetAPIClient(client)
+
+	err = runCreate(context.Background(), opts, "PROJ", "Task", "New issue", "", "", "", nil)
+	testutil.RequireNoError(t, err)
+	testutil.Equal(t, stdout.String(), "TEST-1\n")
+}
+
+// TestRunCreate_FieldComponentArrayAndOptionMerge exercises the full --field
+// pipeline (parse → metadata lookup → FormatFieldValue → MergeFieldValues →
+// POST body construction). It guards two paths:
+//
+//   - components (array of component): a single value must be wrapped as
+//     [{name: "Frontend"}], not the legacy [{value: ...}] or string array.
+//   - a multi-checkbox custom field (array of option): repeated --field args
+//     must accumulate as [{value: "Opt1"}, {value: "Opt2"}], unchanged from
+//     before the components fix.
+func TestRunCreate_FieldComponentArrayAndOptionMerge(t *testing.T) {
+	seedCacheForIssues(t)
+
+	var capturedBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/rest/api/3/field" && r.Method == "GET":
+			fields := []api.Field{
+				{ID: "components", Name: "Components", Schema: api.FieldSchema{Type: "array", Items: "component"}},
+				{ID: "customfield_10100", Name: "Tags", Custom: true, Schema: api.FieldSchema{Type: "array", Items: "option"}},
+			}
+			_ = json.NewEncoder(w).Encode(fields)
+		case r.URL.Path == "/rest/api/3/issue" && r.Method == "POST":
+			capturedBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(api.Issue{Key: "TEST-1", ID: "10001"})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client, err := api.New(api.ClientConfig{URL: server.URL, Email: "e@x", APIToken: "t"})
+	testutil.RequireNoError(t, err)
+
+	opts := &root.Options{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, IDOnly: true}
+	opts.SetAPIClient(client)
+
+	err = runCreate(context.Background(), opts, "PROJ", "Task", "Test", "", "", "", []string{
+		"components=Frontend",
+		"customfield_10100=Opt1",
+		"customfield_10100=Opt2",
+	})
+	testutil.RequireNoError(t, err)
+
+	testutil.NotEmpty(t, capturedBody)
+	var reqBody map[string]any
+	testutil.RequireNoError(t, json.Unmarshal(capturedBody, &reqBody))
+	fields, ok := reqBody["fields"].(map[string]any)
+	testutil.True(t, ok, "fields key missing or wrong type in POST body")
+
+	components, ok := fields["components"].([]any)
+	testutil.True(t, ok, "components key missing or wrong type")
+	testutil.Len(t, components, 1)
+	componentEntry, ok := components[0].(map[string]any)
+	testutil.True(t, ok, "components[0] not a map")
+	// Lock the shape: exactly {"name": "Frontend"} — no leaked "id" key, no extras.
+	testutil.Equal(t, len(componentEntry), 1)
+	testutil.Equal(t, componentEntry["name"], "Frontend")
+
+	tags, ok := fields["customfield_10100"].([]any)
+	testutil.True(t, ok, "customfield_10100 key missing or wrong type")
+	testutil.Len(t, tags, 2)
+	tag0, ok := tags[0].(map[string]any)
+	testutil.True(t, ok, "tags[0] not a map")
+	testutil.Equal(t, tag0["value"], "Opt1")
+	tag1, ok := tags[1].(map[string]any)
+	testutil.True(t, ok, "tags[1] not a map")
+	testutil.Equal(t, tag1["value"], "Opt2")
+}
