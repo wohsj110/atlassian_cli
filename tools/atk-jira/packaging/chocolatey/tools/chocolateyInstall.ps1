@@ -18,7 +18,7 @@ if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {
     throw "32-bit Windows is not supported. atk-jira requires 64-bit Windows."
 }
 
-$baseUrl = "https://github.com/wohsj110/atlassian_cli/releases/download/atk-jira-v${version}"
+$baseUrl = "https://github.com/wohsj110/atlassian_cli/releases/download/v${version}"
 $zipFile = "atk-jira_${version}_windows_${arch}.zip"
 $url = "${baseUrl}/${zipFile}"
 

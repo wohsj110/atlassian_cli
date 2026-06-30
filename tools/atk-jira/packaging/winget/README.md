@@ -41,7 +41,7 @@ URLs contain `0.0.0` in both the tag path and filename, so the version replaceme
 ### Option 1: Manual PR
 
 1. **Get release info:**
-   - Download URLs: `https://github.com/wohsj110/atlassian_cli/releases/download/atk-jira-v<VERSION>/atk-jira_<VERSION>_windows_amd64.zip`
+   - Download URLs: `https://github.com/wohsj110/atlassian_cli/releases/download/v<VERSION>/atk-jira_<VERSION>_windows_amd64.zip`
    - SHA256 checksums from `checksums.txt` in the release
 
 2. **Update manifests:**

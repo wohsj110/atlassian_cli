@@ -18,7 +18,7 @@ if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {
     throw "32-bit Windows is not supported. atk-cfl requires 64-bit Windows."
 }
 
-$baseUrl = "https://github.com/wohsj110/atlassian_cli/releases/download/atk-cfl-v${version}"
+$baseUrl = "https://github.com/wohsj110/atlassian_cli/releases/download/v${version}"
 $zipFile = "atk-cfl_${version}_windows_${arch}.zip"
 $url = "${baseUrl}/${zipFile}"
 

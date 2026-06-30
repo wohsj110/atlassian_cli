@@ -58,19 +58,15 @@ Chocolatey, and direct downloads can install one binary at a time:
 - `atk-jira_<version>_<os>_<arch>`
 - `atk-cfl_<version>_<os>_<arch>`
 
-The packaging templates expect prefixed tags:
+The packaging templates expect one shared version tag:
 
-- `atk-jira-v<version>`
-- `atk-cfl-v<version>`
+- `v<version>`
 
-Create and push the tool tag you want to publish:
+Create and push the release tag:
 
 ```bash
-git tag atk-jira-v0.1.0
-git push origin atk-jira-v0.1.0
-
-git tag atk-cfl-v0.1.0
-git push origin atk-cfl-v0.1.0
+git tag v0.1.0
+git push origin v0.1.0
 ```
 
 For automated releases, add a GitHub Actions workflow that runs GoReleaser on tags.
@@ -156,11 +152,8 @@ goreleaser release --snapshot --clean
 Then release from a tag:
 
 ```bash
-git tag atk-jira-v0.1.0
-git push origin atk-jira-v0.1.0
-
-git tag atk-cfl-v0.1.0
-git push origin atk-cfl-v0.1.0
+git tag v0.1.0
+git push origin v0.1.0
 ```
 
 After release:

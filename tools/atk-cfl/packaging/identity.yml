@@ -6,7 +6,7 @@ binary: atk-cfl
 # and version live under tools/atk-cfl (--working-dir).
 goreleaser_config: .goreleaser.yml
 tag:
-  prefix: atk-cfl-v
+  prefix: v
   version_scheme: major_minor_run_patch
 # string-identical to .goreleaser.yml archives.name_template (identity-check
 # compares the literal template, not its expansion).

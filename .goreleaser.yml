@@ -172,12 +172,14 @@ homebrew_casks:
   - name: atk-jira
     ids:
       - atk-jira
-    skip_upload: true
+    skip_upload: false
     url:
-      template: "https://github.com/wohsj110/atlassian_cli/releases/download/atk-jira-v{{ .Version }}/{{ .ArtifactName }}"
+      template: "https://github.com/wohsj110/atlassian_cli/releases/download/v{{ .Version }}/{{ .ArtifactName }}"
     repository:
       owner: wohsj110
       name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/wohsj110/atlassian_cli
     description: "Command-line interface for Jira Cloud"
     binaries:
@@ -196,12 +198,14 @@ homebrew_casks:
   - name: atk-cfl
     ids:
       - atk-cfl
-    skip_upload: true
+    skip_upload: false
     url:
-      template: "https://github.com/wohsj110/atlassian_cli/releases/download/atk-cfl-v{{ .Version }}/{{ .ArtifactName }}"
+      template: "https://github.com/wohsj110/atlassian_cli/releases/download/v{{ .Version }}/{{ .ArtifactName }}"
     repository:
       owner: wohsj110
       name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/wohsj110/atlassian_cli
     description: "Command-line interface for Atlassian Confluence"
     binaries:

@@ -9,10 +9,10 @@ NestedInstallerFiles:
     PortableCommandAlias: atk-jira
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/wohsj110/atlassian_cli/releases/download/atk-jira-v0.0.0/atk-jira_0.0.0_windows_amd64.zip
+    InstallerUrl: https://github.com/wohsj110/atlassian_cli/releases/download/v0.0.0/atk-jira_0.0.0_windows_amd64.zip
     InstallerSha256: CHECKSUM_AMD64_PLACEHOLDER
   - Architecture: arm64
-    InstallerUrl: https://github.com/wohsj110/atlassian_cli/releases/download/atk-jira-v0.0.0/atk-jira_0.0.0_windows_arm64.zip
+    InstallerUrl: https://github.com/wohsj110/atlassian_cli/releases/download/v0.0.0/atk-jira_0.0.0_windows_arm64.zip
     InstallerSha256: CHECKSUM_ARM64_PLACEHOLDER
 ManifestType: installer
 ManifestVersion: 1.10.0
