@@ -98,7 +98,7 @@ func TestRunList_DefaultJQLIsBounded(t *testing.T) {
 	opts, _, _ := newListOpts(t, server)
 	err := runList(context.Background(), opts, "", "", 25, "", false, "")
 	testutil.RequireNoError(t, err)
-	testutil.Equal(t, jql, "updated >= -30d ORDER BY updated DESC")
+	testutil.Equal(t, jql, "assignee = currentUser() ORDER BY updated DESC")
 }
 
 // seedSprints writes a sprints cache envelope. Pairs with the isolated

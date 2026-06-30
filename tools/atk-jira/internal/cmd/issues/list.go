@@ -31,9 +31,8 @@ func newListCmd(opts *root.Options) *cobra.Command {
 		Short: "List issues",
 		Long: `List issues, optionally filtered by project and/or sprint.
 
-When no filter is provided, atk-jira lists issues updated in the last 30 days
-to avoid Jira Cloud rejecting unrestricted JQL queries.`,
-		Example: `  # No filter: recently updated issues
+When no filter is provided, atk-jira lists issues assigned to the current user.`,
+		Example: `  # No filter: issues assigned to the current user
   atk-jira issues list
 
   # --project accepts a key or name; --sprint accepts a name, numeric ID, or "current"
@@ -128,7 +127,7 @@ func runList(ctx context.Context, opts *root.Options, project, sprint string, ma
 	}
 
 	if jql == "" {
-		jql = "updated >= -30d ORDER BY updated DESC"
+		jql = "assignee = currentUser() ORDER BY updated DESC"
 	} else {
 		jql += " ORDER BY updated DESC"
 	}
