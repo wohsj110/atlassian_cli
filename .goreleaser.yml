@@ -224,4 +224,4 @@ release:
   replace_existing_artifacts: true
   github:
     owner: wohsj110
-    name: atlassian-cli
+    name: atlassian_cli
