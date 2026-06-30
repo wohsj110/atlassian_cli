@@ -11,16 +11,16 @@ const REPO = "https://github.com/wohsj110/atlassian_cli";
 
 function usage() {
   console.log(`Usage:
-  skills add atlassian-agent [--target codex|claude|both] [--dest DIR] [--install-cli]
+  atlassian-agent-skill add atlassian-agent [--target codex|claude|both] [--dest DIR] [--install-cli]
   atlassian-agent-skill install [--target codex|claude|both] [--dest DIR] [--install-cli]
   atlassian-agent-skill install-cli
   atlassian-agent-skill doctor
 
 Examples:
-  npx @wohsj110/skills add atlassian-agent
-  npx atlassian-agent-skill install
-  npx atlassian-agent-skill install --target codex --install-cli
-  npx atlassian-agent-skill install --target claude
+  npx @wohsj110/atlassian-agent-skill add atlassian-agent
+  npx @wohsj110/atlassian-agent-skill add atlassian-agent --install-cli
+  npx @wohsj110/atlassian-agent-skill add atlassian-agent --target codex
+  npx @wohsj110/atlassian-agent-skill add atlassian-agent --target claude
 `);
 }
 
