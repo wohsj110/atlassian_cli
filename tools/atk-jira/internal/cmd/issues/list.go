@@ -29,8 +29,14 @@ func newListCmd(opts *root.Options) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List issues",
-		Long:  "List issues, optionally filtered by project and/or sprint.",
-		Example: `  # --project accepts a key or name; --sprint accepts a name, numeric ID, or "current"
+		Long: `List issues, optionally filtered by project and/or sprint.
+
+When no filter is provided, atk-jira lists issues updated in the last 30 days
+to avoid Jira Cloud rejecting unrestricted JQL queries.`,
+		Example: `  # No filter: recently updated issues
+  atk-jira issues list
+
+  # --project accepts a key or name; --sprint accepts a name, numeric ID, or "current"
   atk-jira issues list --project MYPROJECT
   atk-jira issues list --project "Platform Development" --sprint "MON Sprint 70"
   atk-jira issues list --project MYPROJECT --sprint current
@@ -122,7 +128,7 @@ func runList(ctx context.Context, opts *root.Options, project, sprint string, ma
 	}
 
 	if jql == "" {
-		jql = "ORDER BY updated DESC"
+		jql = "updated >= -30d ORDER BY updated DESC"
 	} else {
 		jql += " ORDER BY updated DESC"
 	}

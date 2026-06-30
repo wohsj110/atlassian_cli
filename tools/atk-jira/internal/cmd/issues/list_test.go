@@ -90,6 +90,17 @@ func TestRunList_SprintCurrentUsesOpenSprints(t *testing.T) {
 	}
 }
 
+func TestRunList_DefaultJQLIsBounded(t *testing.T) {
+	var jql string
+	server := captureJQLServer(t, &jql)
+	defer server.Close()
+
+	opts, _, _ := newListOpts(t, server)
+	err := runList(context.Background(), opts, "", "", 25, "", false, "")
+	testutil.RequireNoError(t, err)
+	testutil.Equal(t, jql, "updated >= -30d ORDER BY updated DESC")
+}
+
 // seedSprints writes a sprints cache envelope. Pairs with the isolated
 // cache set up by seedCacheForIssues.
 func seedSprints(byBoard map[int][]api.Sprint) error {
